@@ -336,7 +336,11 @@ static inline void mminit_validate_memmodel_limits(unsigned long *start_pfn,
 }
 #endif /* CONFIG_SPARSEMEM */
 
+// zone_reclaim函数的返回值
+
+// 当前管理区还没有进行回收
 #define ZONE_RECLAIM_NOSCAN	-2
+// 进行了回收，但是没有可回收的内存
 #define ZONE_RECLAIM_FULL	-1
 #define ZONE_RECLAIM_SOME	0
 #define ZONE_RECLAIM_SUCCESS	1

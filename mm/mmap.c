@@ -532,6 +532,7 @@ static int find_vma_links(struct mm_struct *mm, unsigned long addr,
 
 		if (vma_tmp->vm_end > addr) {
 			/* Fail if an existing vma overlaps the area */
+			// 发现vm的地址范围包含了[addr, end)
 			if (vma_tmp->vm_start < end)
 				return -ENOMEM;
 			__rb_link = &__rb_parent->rb_left;
@@ -549,17 +550,20 @@ static int find_vma_links(struct mm_struct *mm, unsigned long addr,
 	return 0;
 }
 
+// 计算地址范围需要多少页面（包括重叠的页面）
 static unsigned long count_vma_pages_range(struct mm_struct *mm,
 		unsigned long addr, unsigned long end)
 {
 	unsigned long nr_pages = 0;
 	struct vm_area_struct *vma;
 
-	/* Find first overlaping mapping */
+	/* Find first overlaping mapping 
+	// 查找在管理范围包含这个地址区间的VM
 	vma = find_vma_intersection(mm, addr, end);
 	if (!vma)
 		return 0;
 
+	// 计算地址范围至少需要多少page
 	nr_pages = (min(end, vma->vm_end) -
 		max(addr, vma->vm_start)) >> PAGE_SHIFT;
 
@@ -567,9 +571,11 @@ static unsigned long count_vma_pages_range(struct mm_struct *mm,
 	for (vma = vma->vm_next; vma; vma = vma->vm_next) {
 		unsigned long overlap_len;
 
+		// 找到了最后一块vma，退出循环
 		if (vma->vm_start > end)
 			break;
 
+		// 计算重叠的长度
 		overlap_len = min(end, vma->vm_end) - vma->vm_start;
 		nr_pages += overlap_len >> PAGE_SHIFT;
 	}
@@ -1253,6 +1259,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 
 	/* mlock MCL_FUTURE? */
 	if (vm_flags & VM_LOCKED) {
+		// 检查lock memory数量是否超过限制？
 		unsigned long locked, lock_limit;
 		locked = len >> PAGE_SHIFT;
 		locked += mm->locked_vm;
@@ -1262,11 +1269,12 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 			return -EAGAIN;
 	}
 
-	if (file) {
+	if (file) {	// 如果是映射文件
 		struct inode *inode = file_inode(file);
 
 		switch (flags & MAP_TYPE) {
 		case MAP_SHARED:
+			// 要求写操作，但是又没有写权限
 			if ((prot&PROT_WRITE) && !(file->f_mode&FMODE_WRITE))
 				return -EACCES;
 
@@ -1307,6 +1315,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 			return -EINVAL;
 		}
 	} else {
+		// 到这里不是文件映射的情况
 		switch (flags & MAP_TYPE) {
 		case MAP_SHARED:
 			if (vm_flags & (VM_GROWSDOWN|VM_GROWSUP))
@@ -1482,6 +1491,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	unsigned long charged = 0;
 
 	/* Check against address space limit. */
+	// 检查是否可以扩展虚拟地址空间？
 	if (!may_expand_vm(mm, len >> PAGE_SHIFT)) {
 		unsigned long nr_pages;
 
@@ -1489,11 +1499,13 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 		 * MAP_FIXED may remove pages of mappings that intersects with
 		 * requested mapping. Account for the pages it would unmap.
 		 */
+		// MAP_FIXED将移除重叠的映射空间，所以如果在不能扩展虚拟空间且没有这个标志位的情况下，返回失败
 		if (!(vm_flags & MAP_FIXED))
 			return -ENOMEM;
 
 		nr_pages = count_vma_pages_range(mm, addr, addr + len);
 
+		// 再次尝试扩展页面，这次减去重叠的页面
 		if (!may_expand_vm(mm, (len >> PAGE_SHIFT) - nr_pages))
 			return -ENOMEM;
 	}
@@ -1502,6 +1514,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	error = -ENOMEM;
 munmap_back:
 	if (find_vma_links(mm, addr, addr + len, &prev, &rb_link, &rb_parent)) {
+		// 如果地址范围有重叠，首先去unmap，然后再次尝试
 		if (do_munmap(mm, addr, len))
 			return -ENOMEM;
 		goto munmap_back;
@@ -1520,10 +1533,12 @@ munmap_back:
 	/*
 	 * Can we just expand an old mapping?
 	 */
+	// 如果能尝试扩展已有的maping就能达到分配的目的，就直接返回
 	vma = vma_merge(mm, prev, addr, addr + len, vm_flags, NULL, file, pgoff, NULL);
 	if (vma)
 		goto out;
 
+	// 到了这里就需要分配一个新的VMA才能达到目的了
 	/*
 	 * Determine the object being mapped and call the appropriate
 	 * specific mapper. the address has already been validated, but
@@ -2847,6 +2862,7 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
  * Return true if the calling process may expand its vm space by the passed
  * number of pages
  */
+// 判断是否能扩展虚拟内存空间
 int may_expand_vm(struct mm_struct *mm, unsigned long npages)
 {
 	unsigned long cur = mm->total_vm;	/* pages */

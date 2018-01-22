@@ -3447,6 +3447,7 @@ int zone_reclaim_mode __read_mostly;
 
 #define RECLAIM_OFF 0
 #define RECLAIM_ZONE (1<<0)	/* Run shrink_inactive_list on the zone */
+// 回收页面时进行写入操作
 #define RECLAIM_WRITE (1<<1)	/* Writeout pages during reclaim */
 #define RECLAIM_SWAP (1<<2)	/* Swap pages out during reclaim */
 
@@ -3469,6 +3470,7 @@ int sysctl_min_unmapped_ratio = 1;
  */
 int sysctl_min_slab_ratio = 5;
 
+// 计算非映射文件页数量
 static inline unsigned long zone_unmapped_file_pages(struct zone *zone)
 {
 	unsigned long file_mapped = zone_page_state(zone, NR_FILE_MAPPED);
@@ -3484,6 +3486,7 @@ static inline unsigned long zone_unmapped_file_pages(struct zone *zone)
 }
 
 /* Work out how many page cache pages we can reclaim in this reclaim_mode */
+// 计算zone中可回收的page数量
 static long zone_pagecache_reclaimable(struct zone *zone)
 {
 	long nr_pagecache_reclaimable;
@@ -3496,18 +3499,22 @@ static long zone_pagecache_reclaimable(struct zone *zone)
 	 * a better estimate
 	 */
 	if (zone_reclaim_mode & RECLAIM_SWAP)
+    // 如果是可以swap出去的模式，计算映射文件的page数量
 		nr_pagecache_reclaimable = zone_page_state(zone, NR_FILE_PAGES);
 	else
+    // 否则计算非映射的文件page数量
 		nr_pagecache_reclaimable = zone_unmapped_file_pages(zone);
 
 	/* If we can't clean pages, remove dirty pages from consideration */
 	if (!(zone_reclaim_mode & RECLAIM_WRITE))
+    // 如果不是回收页面时可以进行写入操作的模式，计算delta为所有脏页的数量
 		delta += zone_page_state(zone, NR_FILE_DIRTY);
 
 	/* Watch for any possible underflows due to delta */
 	if (unlikely(delta > nr_pagecache_reclaimable))
 		delta = nr_pagecache_reclaimable;
 
+  // 回收页面数量是两者的差值
 	return nr_pagecache_reclaimable - delta;
 }
 

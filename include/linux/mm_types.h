@@ -43,9 +43,15 @@ struct address_space;
  */
 struct page {
 	/* First double word block */
+  // 页面标志，同时也有一些位用于表示页面所处的管理区编号
+  // 参见include/linux/page-flags.h中的pageflags
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
 	union {
+    /**
+     * 如果页面映射到一个文件，那么其最低位为0，并且值是文件节点的地址空间对象。
+     * 如果是一个匿名页，则指向匿名页的anon_vma对象。
+     */
 		struct address_space *mapping;	/* If low bit clear, points to
 						 * inode address_space, or NULL.
 						 * If page mapped as anonymous
@@ -59,7 +65,9 @@ struct page {
 	/* Second double word */
 	struct {
 		union {
+      // 文件映射时是文件内部页号，匿名页则是线性区内的页号
 			pgoff_t index;		/* Our offset within mapping. */
+      // 用于slab时，指向第一个空闲对象
 			void *freelist;		/* sl[aou]b first free object */
 			bool pfmemalloc;	/* If set by the page allocator,
 						 * ALLOC_NO_WATERMARKS was set
@@ -105,6 +113,10 @@ struct page {
 					 * never succeed on tail
 					 * pages.
 					 */
+          /**
+           * 映射计数，即有多少个pte映射到此页面。
+           * 小于0表示没有映射，＝0表示有一个进程在对该页面进行私有映射，大于0表示有多个进程对它进程了共享映射。
+           */
 					atomic_t _mapcount;
 
 					struct { /* SLUB */
@@ -122,6 +134,7 @@ struct page {
 
 	/* Third double word block */
 	union {
+    // 通过此字段，将页面链接到LRU链表中去。由zone->lru_lock保护
 		struct list_head lru;	/* Pageout list, eg. active_list
 					 * protected by zone->lru_lock !
 					 */
@@ -296,6 +309,7 @@ struct vm_area_struct {
 	const struct vm_operations_struct *vm_ops;
 
 	/* Information about our backing store: */
+	// 如果是文件映射，vm_pgoff表示映射范围在文件中的偏移量
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units, *not* PAGE_CACHE_SIZE */
 	struct file * vm_file;		/* File we map to (can be NULL). */
