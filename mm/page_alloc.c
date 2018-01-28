@@ -1897,11 +1897,13 @@ static nodemask_t *zlc_setup(struct zonelist *zonelist, int alloc_flags)
 	if (!zlc)
 		return NULL;
 
+  // 更新时间
 	if (time_after(jiffies, zlc->last_full_zap + HZ)) {
 		bitmap_zero(zlc->fullzones, MAX_ZONES_PER_ZONELIST);
 		zlc->last_full_zap = jiffies;
 	}
 
+  // 更新node mask
 	allowednodes = !in_interrupt() && (alloc_flags & ALLOC_CPUSET) ?
 					&cpuset_current_mems_allowed :
 					&node_states[N_MEMORY];
@@ -1930,6 +1932,7 @@ static nodemask_t *zlc_setup(struct zonelist *zonelist, int alloc_flags)
  * We are low on memory in the second scan, and should leave no stone
  * unturned looking for a free page.
  */
+// 快速判断一个node是否值得尝试
 static int zlc_zone_worth_trying(struct zonelist *zonelist, struct zoneref *z,
 						nodemask_t *allowednodes)
 {
@@ -1945,6 +1948,8 @@ static int zlc_zone_worth_trying(struct zonelist *zonelist, struct zoneref *z,
 	n = zlc->z_to_n[i];
 
 	/* This zone is worth trying if it is allowed but not full */
+  // node_isset:判断node id是否在allowednodes位图中
+  // test_bit：判断是否已经内存短缺
 	return node_isset(n, *allowednodes) && !test_bit(i, zlc->fullzones);
 }
 
@@ -2089,7 +2094,7 @@ zonelist_scan:
 				continue;
 		BUILD_BUG_ON(ALLOC_NO_WATERMARKS < NR_WMARK);
 		if (unlikely(alloc_flags & ALLOC_NO_WATERMARKS))
-      // 分配时不需要考虑水线，直接跳转到try_this_zone进行分配
+      // 分配时不需要考虑水线，直接跳转到try_this_zone进行尝试
 			goto try_this_zone;
 		/*
 		 * Distribute pages in proportion to the individual
@@ -2154,6 +2159,7 @@ zonelist_scan:
 				 * and before considering the first zone allowed
 				 * by the cpuset.
 				 */
+        // 修改allowednodes
 				allowednodes = zlc_setup(zonelist, alloc_flags);
 				zlc_active = 1;
 				did_zlc_setup = 1;

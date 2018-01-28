@@ -126,6 +126,7 @@ struct page {
 					};
 					int units;	/* SLOB */
 				};
+        // 该page的引用计数
 				atomic_t _count;		/* Usage count, see below. */
 			};
 			unsigned int active;	/* SLAB */
@@ -161,6 +162,7 @@ struct page {
 
 	/* Remainder is not double word aligned */
 	union {
+    // 由映射私有，不透明数据
 		unsigned long private;		/* Mapping-private opaque data:
 					 	 * usually used for buffer_heads
 						 * if PagePrivate set; used for
@@ -175,6 +177,7 @@ struct page {
 		spinlock_t ptl;
 #endif
 #endif
+    // 用于slub分配器，指向slab的指针
 		struct kmem_cache *slab_cache;	/* SL[AU]B: Pointer to slab */
 		struct page *first_page;	/* Compound tail pages */
 	};
@@ -190,6 +193,7 @@ struct page {
 	 * WANT_PAGE_VIRTUAL in asm/page.h
 	 */
 #if defined(WANT_PAGE_VIRTUAL)
+  // 内核虚拟地址
 	void *virtual;			/* Kernel virtual address (NULL if
 					   not kmapped, ie. highmem) */
 #endif /* WANT_PAGE_VIRTUAL */

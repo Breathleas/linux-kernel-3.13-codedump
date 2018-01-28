@@ -381,8 +381,10 @@ static inline void __nodes_fold(nodemask_t *dstp, const nodemask_t *origp,
  * Bitmasks that are kept for all the nodes.
  */
 enum node_states {
+  // N_POSSIBLE,N_ONLINE,N_CPU仅用于CPU和内存的热插拔
 	N_POSSIBLE,		/* The node could become online at some point */
 	N_ONLINE,		/* The node is online */
+  // 如果节点有高端内存则使用N_HIGH_MEMORY，否则都是使用N_NORMAL_MEMORY
 	N_NORMAL_MEMORY,	/* The node has regular memory */
 #ifdef CONFIG_HIGHMEM
 	N_HIGH_MEMORY,		/* The node has regular or high memory */

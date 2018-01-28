@@ -36,9 +36,13 @@
 #define PAGE_ALLOC_COSTLY_ORDER 3
 
 enum {
+  // 不可移动页，在内存中有固定位置，内核分配的大部分内存属于这个类型
 	MIGRATE_UNMOVABLE,
+  // 可回收页，不能直接移动，但是可以删除，其内容可以通过某些源重新生成，比如映射自文件的数据
 	MIGRATE_RECLAIMABLE,
+  // 可移动页，可以随意移动，用户空间的内存属于该类型。
 	MIGRATE_MOVABLE,
+  // pcp对应的是per_cpu_pageset的缩写
 	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
 	MIGRATE_RESERVE = MIGRATE_PCPTYPES,
 #ifdef CONFIG_CMA
@@ -245,6 +249,7 @@ struct per_cpu_pages {
 	struct list_head lists[MIGRATE_PCPTYPES];
 };
 
+// 实现冷热分配的结构体
 struct per_cpu_pageset {
 	struct per_cpu_pages pcp;
 #ifdef CONFIG_NUMA
@@ -723,8 +728,11 @@ static inline bool zone_is_empty(struct zone *zone)
 
 
 struct zonelist_cache {
+  // 保存zone的nodeid
 	unsigned short z_to_n[MAX_ZONES_PER_ZONELIST];		/* zone->nid */
+  // 保存zone是否内存短缺
 	DECLARE_BITMAP(fullzones, MAX_ZONES_PER_ZONELIST);	/* zone full? */
+  // 上一次时间
 	unsigned long last_full_zap;		/* when last zap'd (jiffies) */
 };
 #else
@@ -793,8 +801,8 @@ extern struct page *mem_map;
 struct bootmem_data;
 typedef struct pglist_data {
   // 该节点内的内存区。可能的区域类型用zone_type表示。
-  // 该节点的备用内存区。当节点没有可用内存时，就从备用区中分配内存。
 	struct zone node_zones[MAX_NR_ZONES];
+  // 该节点的备用内存区。当节点没有可用内存时，就从备用区中分配内存。
 	struct zonelist node_zonelists[MAX_ZONELISTS];
   // 可用内存区数目，即node_zones数据中保存的最后一个有效区域的索引。
 	int nr_zones;
