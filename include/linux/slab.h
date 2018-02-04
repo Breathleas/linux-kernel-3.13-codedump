@@ -622,6 +622,7 @@ extern void *__kmalloc_node_track_caller(size_t, gfp_t, int, unsigned long);
  */
 static inline void *kmem_cache_zalloc(struct kmem_cache *k, gfp_t flags)
 {
+  // kmem_cache_alloc函数有sl[aou]b不同的实现
 	return kmem_cache_alloc(k, flags | __GFP_ZERO);
 }
 

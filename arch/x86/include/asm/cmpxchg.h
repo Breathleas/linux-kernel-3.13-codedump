@@ -224,6 +224,7 @@ extern void __add_wrong_size(void)
 	__ret;								\
 })
 
+// 对比p1和o1，以及p2和o2，如果相同的话，就修改p1,p2为n1，n2
 #define cmpxchg_double(p1, p2, o1, o2, n1, n2) \
 	__cmpxchg_double(LOCK_PREFIX, p1, p2, o1, o2, n1, n2)
 

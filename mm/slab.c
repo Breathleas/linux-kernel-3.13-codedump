@@ -176,11 +176,16 @@ static bool pfmemalloc_active __read_mostly;
  *
  */
 struct array_cache {
+  // 可用对象数目
 	unsigned int avail;
+  // 可拥有的最大对象数目，和kmem_cache中一样
 	unsigned int limit;
+  // 同kmem_cache，要转移进本地高速缓存或从本地高速缓存中转移出去的对象的数量
 	unsigned int batchcount;
+  // 是否在收缩后被访问过，这个标志位影响后续分配给该数组的对象数量
 	unsigned int touched;
 	spinlock_t lock;
+  // 伪数组，初始没有任何数据项，之后会增加并保存释放的对象指针
 	void *entry[];	/*
 			 * Must have this definition in here for the proper
 			 * alignment of array_cache. Also simplifies accessing
@@ -266,6 +271,7 @@ static void kmem_cache_node_init(struct kmem_cache_node *parent)
 	MAKE_LIST((cachep), (&(ptr)->slabs_free), slabs_free, nodeid);	\
 	} while (0)
 
+// 这个标志意味着对象在slab外
 #define CFLGS_OFF_SLAB		(0x80000000UL)
 #define	OFF_SLAB(x)	((x)->flags & CFLGS_OFF_SLAB)
 
@@ -390,6 +396,7 @@ static inline struct kmem_cache *virt_to_cache(const void *obj)
 	return page->slab_cache;
 }
 
+// 根据index拿到object指针
 static inline void *index_to_obj(struct kmem_cache *cache, struct page *page,
 				 unsigned int idx)
 {
@@ -837,6 +844,7 @@ static inline void *ac_get_obj(struct kmem_cache *cachep,
 	if (unlikely(sk_memalloc_socks()))
 		objp = __ac_get_obj(cachep, ac, flags, force_refill);
 	else
+    // 从local cache的entry数组中提取最后面的空闲对象
 		objp = ac->entry[--ac->avail];
 
 	return objp;
@@ -870,6 +878,7 @@ static inline void ac_put_obj(struct kmem_cache *cachep, struct array_cache *ac,
  *
  * Return the number of entries transferred.
  */
+// 从一个array_cache拷贝对象到另一个array_cache
 static int transfer_objects(struct array_cache *to,
 		struct array_cache *from, unsigned int max)
 {
@@ -2529,11 +2538,13 @@ static void *alloc_slabmgmt(struct kmem_cache *cachep,
 
 	if (OFF_SLAB(cachep)) {
 		/* Slab management obj is off-slab. */
+    // 在slab外的情况
 		freelist = kmem_cache_alloc_node(cachep->freelist_cache,
 					      local_flags, nodeid);
 		if (!freelist)
 			return NULL;
 	} else {
+    // 在slab内的情况
 		freelist = addr + colour_off;
 		colour_off += cachep->freelist_size;
 	}
@@ -2603,6 +2614,7 @@ static void kmem_flagcheck(struct kmem_cache *cachep, gfp_t flags)
 	}
 }
 
+// 从slab里面拿下一个object
 static void *slab_get_obj(struct kmem_cache *cachep, struct page *page,
 				int nodeid)
 {
@@ -2680,6 +2692,7 @@ static int cache_grow(struct kmem_cache *cachep,
 	offset = n->colour_next;
 	n->colour_next++;
 	if (n->colour_next >= cachep->colour)
+    // 如果颜色到了尽头，就回绕
 		n->colour_next = 0;
 	spin_unlock(&n->list_lock);
 
@@ -2701,6 +2714,7 @@ static int cache_grow(struct kmem_cache *cachep,
 	 * 'nodeid'.
 	 */
 	if (!page)
+    // 尝试拿一个新的page
 		page = kmem_getpages(cachep, local_flags, nodeid);
 	if (!page)
 		goto failed;
@@ -2721,6 +2735,7 @@ static int cache_grow(struct kmem_cache *cachep,
 	spin_lock(&n->list_lock);
 
 	/* Make slab active. */
+  // 加入到slab空闲链表中
 	list_add_tail(&page->lru, &(n->slabs_free));
 	STATS_INC_GROWN(cachep);
 	n->free_objects += cachep->num;
@@ -2818,6 +2833,7 @@ static void *cache_free_debugcheck(struct kmem_cache *cachep, void *objp,
 #define cache_free_debugcheck(x,objp,z) (objp)
 #endif
 
+// 从slab三链中提取一部分空闲对象填充到local cache中
 static void *cache_alloc_refill(struct kmem_cache *cachep, gfp_t flags,
 							bool force_refill)
 {
@@ -2827,11 +2843,14 @@ static void *cache_alloc_refill(struct kmem_cache *cachep, gfp_t flags,
 	int node;
 
 	check_irq_off();
+  // 获得本内存节点，UMA只有一个节点
 	node = numa_mem_id();
 	if (unlikely(force_refill))
 		goto force_grow;
 retry:
+  // 获得本CPU的local cache
 	ac = cpu_cache_get(cachep);
+  // 批量填充的数目，local cache是按批填充的
 	batchcount = ac->batchcount;
 	if (!ac->touched && batchcount > BATCHREFILL_LIMIT) {
 		/*
@@ -2839,31 +2858,45 @@ retry:
 		 * perform only a partial refill.  Otherwise we could generate
 		 * refill bouncing.
 		 */
+    // 最近未使用过此local cache，没有必要添加过多的对象 
+    // ，添加的数目为默认的限定值 
 		batchcount = BATCHREFILL_LIMIT;
 	}
+  // 获得本内存节点、本cache的slab三链
 	n = cachep->node[node];
 
 	BUG_ON(ac->avail > 0 || !n);
 	spin_lock(&n->list_lock);
 
 	/* See if we can refill from the shared array */
+  /* shared local cache用于多核系统中，为所有cpu共享 
+    ，如果slab cache包含一个这样的结构 
+    ，那么首先从shared local cache中批量搬运空闲对象到local cache中 
+    。通过shared local cache使填充工作变得简单。*/  
 	if (n->shared && transfer_objects(ac, n->shared, batchcount)) {
 		n->shared->touched = 1;
 		goto alloc_done;
 	}
 
+  /* 如果没有shared local cache，或是其中没有空闲的对象 
+    ，从slab链表中分配 */  
 	while (batchcount > 0) {
 		struct list_head *entry;
 		struct page *page;
 		/* Get slab alloc is to come from. */
+    // 先从部分满slab链表中分配
 		entry = n->slabs_partial.next;
-		if (entry == &n->slabs_partial) {
+		if (entry == &n->slabs_partial) { // next指向头节点本身，说明部分满slab链表为空
+      // 表示刚刚访问了slab空链表
 			n->free_touched = 1;
+      // 再从空闲slab链表中分配
 			entry = n->slabs_free.next;
 			if (entry == &n->slabs_free)
+        // 空slab链表也为空，必须增加slab了
 				goto must_grow;
 		}
 
+    // 拿到对应的页框
 		page = list_entry(entry, struct page, lru);
 		check_spinlock_acquired(cachep);
 
@@ -2874,6 +2907,7 @@ retry:
 		 */
 		BUG_ON(page->active >= cachep->num);
 
+    // 循环从page中取出batchcount个对象，放入local cache中
 		while (page->active < cachep->num && batchcount--) {
 			STATS_INC_ALLOCED(cachep);
 			STATS_INC_ACTIVE(cachep);
@@ -2885,33 +2919,45 @@ retry:
 
 		/* move slabp to correct slabp list: */
 		list_del(&page->lru);
+    // 根据情况放入到不同的slabs链表中
 		if (page->active == cachep->num)
+      // 可用的数量=cache数量，加入满slab链表
 			list_add(&page->list, &n->slabs_full);
 		else
 			list_add(&page->list, &n->slabs_partial);
 	}
 
 must_grow:
+  /* 前面从slab链表中添加avail个空闲对象到local cache中 
+    ，更新slab链表的空闲对象数 */
 	n->free_objects -= ac->avail;
 alloc_done:
 	spin_unlock(&n->list_lock);
 
-	if (unlikely(!ac->avail)) {
+	if (unlikely(!ac->avail)) { // local cache中仍没有可用的空闲对象，说明slab三链中也没有空闲对象，需要创建新的空slab了
 		int x;
 force_grow:
+    // 创建一个空slab
 		x = cache_grow(cachep, flags | GFP_THISNODE, node, NULL);
 
 		/* cache_grow can reenable interrupts, then ac could change. */
+    // 上面的操作使能了中断，此期间local cache指针可能发生了变化，需要重新获得
 		ac = cpu_cache_get(cachep);
 		node = numa_mem_id();
 
 		/* no objects in sight? abort */
+    // 无法新增空slab，local cache中也没有空闲对象，表明系统已经无法分配新的空闲对象了
 		if (!x && (ac->avail == 0 || force_refill))
 			return NULL;
 
+    /* 走到这有两种可能，第一种是无论新增空slab成功或失败，只要avail不为0 
+        ，表明是其他进程重填了local cache，本进程就不需要重填了 
+        ，不执行retry流程。第二种是avail为0，并且新增空slab成功 
+        ，则进入retry流程，利用新分配的空slab填充local cache */  
 		if (!ac->avail)		/* objects refilled by interrupt? */
 			goto retry;
 	}
+  // 重填了local cache，设置近期访问标志
 	ac->touched = 1;
 
 	return ac_get_obj(cachep, ac, flags, force_refill);
@@ -2990,8 +3036,11 @@ static inline void *____cache_alloc(struct kmem_cache *cachep, gfp_t flags)
 
 	check_irq_off();
 
+  // 获得本CPU的local cache
 	ac = cpu_cache_get(cachep);
-	if (likely(ac->avail)) {
+	if (likely(ac->avail)) {  // 如果local cache中有可用的空闲对象
+    // touched置1表示最近使用了local cache，这会影响填充 
+    // local cache时的数目，最近使用的填充较多的对象
 		ac->touched = 1;
 		objp = ac_get_obj(cachep, ac, flags, false);
 
@@ -3000,18 +3049,22 @@ static inline void *____cache_alloc(struct kmem_cache *cachep, gfp_t flags)
 		 * by the current flags
 		 */
 		if (objp) {
+      // 更新local cache命中计数
 			STATS_INC_ALLOCHIT(cachep);
 			goto out;
 		}
 		force_refill = true;
 	}
 
+  // local cache中没有空闲对象，更新未命中计数
 	STATS_INC_ALLOCMISS(cachep);
+  // 从slab三链中提取空闲对象填充到local cache中
 	objp = cache_alloc_refill(cachep, flags, force_refill);
 	/*
 	 * the 'ac' may be updated by cache_alloc_refill(),
 	 * and kmemleak_erase() requires its correct value.
 	 */
+  // cache_alloc_refill的cache_grow打开了中断，local cache指针可能发生了变化，需要重新获得
 	ac = cpu_cache_get(cachep);
 
 out:
@@ -3021,6 +3074,7 @@ out:
 	 * treat the array pointers as a reference to the object.
 	 */
 	if (objp)
+    // 分配出去的对象，其entry指针指向空
 		kmemleak_erase(&ac->entry[ac->avail]);
 	return objp;
 }
@@ -3157,12 +3211,16 @@ retry:
 	spin_lock(&n->list_lock);
 	entry = n->slabs_partial.next;
 	if (entry == &n->slabs_partial) {
+    // 如果partial链表已经为空
 		n->free_touched = 1;
+    // 尝试从空闲链表拿
 		entry = n->slabs_free.next;
 		if (entry == &n->slabs_free)
+      // 空闲链表也为空，需要增加空间了
 			goto must_grow;
 	}
 
+  // 拿下一个page
 	page = list_entry(entry, struct page, lru);
 	check_spinlock_acquired_node(cachep, nodeid);
 
@@ -3172,11 +3230,15 @@ retry:
 
 	BUG_ON(page->active == cachep->num);
 
+  // 从slab中拿到对象
 	obj = slab_get_obj(cachep, page, nodeid);
+  // 空闲对象数量减一
 	n->free_objects--;
 	/* move slabp to correct slabp list: */
+  // 从page的lru链表中删除
 	list_del(&page->lru);
 
+  // 根据不同的情况，将page加入到full或者partial链表中
 	if (page->active == cachep->num)
 		list_add(&page->lru, &n->slabs_full);
 	else
@@ -3186,6 +3248,7 @@ retry:
 	goto done;
 
 must_grow:
+  // 这个label是需要增加空间的情况
 	spin_unlock(&n->list_lock);
 	x = cache_grow(cachep, flags | GFP_THISNODE, nodeid, NULL);
 	if (x)

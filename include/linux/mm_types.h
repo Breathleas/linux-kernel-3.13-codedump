@@ -59,6 +59,7 @@ struct page {
 						 * it points to anon_vma object:
 						 * see PAGE_MAPPING_ANON below.
 						 */
+    // 指向第一个SLAB对象的地址
 		void *s_mem;			/* slab first object */
 	};
 
@@ -84,6 +85,7 @@ struct page {
 #if defined(CONFIG_HAVE_CMPXCHG_DOUBLE) && \
 	defined(CONFIG_HAVE_ALIGNED_STRUCT_PAGE)
 			/* Used for cmpxchg_double in slub */
+      // SLUB使用
 			unsigned long counters;
 #else
 			/*
@@ -121,14 +123,19 @@ struct page {
 
 					struct { /* SLUB */
 						unsigned inuse:16;
+            // 对象数量
 						unsigned objects:15;
+            // 被slub使用
 						unsigned frozen:1;
 					};
 					int units;	/* SLOB */
 				};
-        // 该page的引用计数
+        /* 页框的引用计数，如果为-1，则此页框空闲，并可分配给任一进程或内核；
+           如果大于或等于0，则说明页框被分配给了一个或多个进程，或用于存放内核数据。
+            page_count()返回_count加1的值，也就是该页的使用者数目 */
 				atomic_t _count;		/* Usage count, see below. */
 			};
+      // 用于SLAB时描述当前SLAB已经使用的对象
 			unsigned int active;	/* SLAB */
 		};
 	};

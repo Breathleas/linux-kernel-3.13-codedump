@@ -38,9 +38,13 @@ enum stat_item {
 	NR_SLUB_STAT_ITEMS };
 
 struct kmem_cache_cpu {
+  // 指向下一个可用的空闲对象
 	void **freelist;	/* Pointer to next available object */
 	unsigned long tid;	/* Globally unique transaction id */
+  // 从哪个物理页帧中做slab分配
 	struct page *page;	/* The slab from which we are allocating */
+  // CPU的部分空slab链表，放到CPU的部分空slab链表中的slab会被冻结，
+  // 而放入node中的部分空slab链表则解冻，冻结标志在slab缓冲区描述符中
 	struct page *partial;	/* Partially allocated frozen slabs */
 #ifdef CONFIG_SLUB_STATS
 	unsigned stat[NR_SLUB_STAT_ITEMS];
@@ -63,11 +67,20 @@ struct kmem_cache {
 	struct kmem_cache_cpu __percpu *cpu_slab;
 	/* Used for retriving partial slabs etc */
 	unsigned long flags;
+  // partial链表中需要保持的最小的slab对象数量
 	unsigned long min_partial;
+  // slab缓存对象的大小，包括了元数据
 	int size;		/* The size of an object including meta data */
+  // slab缓存对象的实际大小
 	int object_size;	/* The size of an object without meta data */
+  // 空闲object指针的偏移量
 	int offset;		/* Free pointer offset. */
+  // 表示kmem_cache_cpu结构中partial指针指向的冻结slab中
+  // 包含的空闲object总数量的一个阈值，超过这个值，partial指针
+  // 指向的冻结slav就会挂到缓存的部分满链表中
 	int cpu_partial;	/* Number of per cpu partial objects to keep around */
+  // 高16位：存放分配给slab的物理页的阶数
+  // 低16位：存放slab中的对象数量
 	struct kmem_cache_order_objects oo;
 
 	/* Allocation and freeing of slabs */
@@ -80,6 +93,7 @@ struct kmem_cache {
 	int align;		/* Alignment */
 	int reserved;		/* Reserved bytes at the end of slabs */
 	const char *name;	/* Name (only for display!) */
+  // 链表头为全局变量slab_caches
 	struct list_head list;	/* List of slab caches */
 #ifdef CONFIG_SYSFS
 	struct kobject kobj;	/* For sysfs */

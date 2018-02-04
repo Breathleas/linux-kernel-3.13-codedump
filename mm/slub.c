@@ -1332,8 +1332,10 @@ static struct page *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 	 */
 	alloc_gfp = (flags | __GFP_NOWARN | __GFP_NORETRY) & ~__GFP_NOFAIL;
 
+  // 首先尝试根据oo来申请物理页帧
 	page = alloc_slab_page(alloc_gfp, node, oo);
 	if (unlikely(!page)) {
+    // 申请失败就采用min来尝试
 		oo = s->min;
 		/*
 		 * Allocation may have failed due to fragmentation.
@@ -1366,6 +1368,7 @@ static struct page *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 	if (!page)
 		return NULL;
 
+  // 记录对象数量
 	page->objects = oo_objects(oo);
 	mod_zone_page_state(page_zone(page),
 		(s->flags & SLAB_RECLAIM_ACCOUNT) ?
@@ -1393,12 +1396,14 @@ static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
 
 	BUG_ON(flags & GFP_SLAB_BUG_MASK);
 
+  // 分配物理页帧
 	page = allocate_slab(s,
 		flags & (GFP_RECLAIM_MASK | GFP_CONSTRAINT_MASK), node);
 	if (!page)
 		goto out;
 
 	order = compound_order(page);
+  // 增加slab数量计数
 	inc_slabs_node(s, page_to_nid(page), page->objects);
 	memcg_bind_pages(s, order);
 	page->slab_cache = s;
@@ -1412,6 +1417,7 @@ static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
 		memset(start, POISON_INUSE, PAGE_SIZE << order);
 
 	last = start;
+  // 遍历对象，把这些对象串在freelist上
 	for_each_object(p, s, start, page->objects) {
 		setup_object(s, page, last);
 		set_freepointer(s, last, p);
@@ -2214,6 +2220,7 @@ static inline bool pfmemalloc_match(struct page *page, gfp_t gfpflags)
  *
  * This function must be called with interrupt disabled.
  */
+// 返回NULL说明page已经被冻结，否则就返回非NULL指针
 static inline void *get_freelist(struct kmem_cache *s, struct page *page)
 {
 	struct page new;
@@ -2254,6 +2261,11 @@ static inline void *get_freelist(struct kmem_cache *s, struct page *page)
  * we need to allocate a new slab. This is the slowest path since it involves
  * a call to the page allocator and the setup of a new slab.
  */
+// 分三种情况：
+// 1）如果CPU上面冻结slab的partial指针不为空，且上面还有空闲对象，那就从空闲链表
+//    上面分配对象就可以了
+// 2）如果第一步走不通，需要从本地缓存的partial链表中分配slab
+// 3）如果上面第2步还走不通，那么需要从buddy系统分配一个新的slab
 static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 			  unsigned long addr, struct kmem_cache_cpu *c)
 {
@@ -2273,10 +2285,12 @@ static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 
 	page = c->page;
 	if (!page)
+    // 物理页帧为空，需要分配一个新的slab
 		goto new_slab;
 redo:
 
 	if (unlikely(!node_match(page, node))) {
+    // node和page不匹配，重新分配slab
 		stat(s, ALLOC_NODE_MISMATCH);
 		deactivate_slab(s, page, c->freelist);
 		c->page = NULL;
@@ -2297,15 +2311,18 @@ redo:
 	}
 
 	/* must check again c->freelist in case of cpu migration or IRQ */
+  // 检查是否还有可用对象
 	freelist = c->freelist;
 	if (freelist)
 		goto load_freelist;
 
+  // 下面正式进入slow path
 	stat(s, ALLOC_SLOWPATH);
 
 	freelist = get_freelist(s, page);
 
 	if (!freelist) {
+    // 返回NULL，说明page已经被冻结
 		c->page = NULL;
 		stat(s, DEACTIVATE_BYPASS);
 		goto new_slab;
@@ -2320,6 +2337,7 @@ load_freelist:
 	 * That page must be frozen for per cpu allocations to work.
 	 */
 	VM_BUG_ON(!c->page->frozen);
+  // 从freelist中分配对象
 	c->freelist = get_freepointer(s, freelist);
 	c->tid = next_tid(c->tid);
 	local_irq_restore(flags);
@@ -2328,6 +2346,7 @@ load_freelist:
 new_slab:
 
 	if (c->partial) {
+    // 尝试从partial链表获取对象
 		page = c->page = c->partial;
 		c->partial = page->next;
 		stat(s, CPU_PARTIAL_ALLOC);
@@ -2335,6 +2354,7 @@ new_slab:
 		goto redo;
 	}
 
+  // 到了这里还不行，就分配一个新的slab
 	freelist = new_slab_objects(s, gfpflags, node, &c);
 
 	if (unlikely(!freelist)) {
@@ -2410,6 +2430,7 @@ redo:
 	object = c->freelist;
 	page = c->page;
 	if (unlikely(!object || !node_match(page, node)))
+    // 进入慢速流程
 		object = __slab_alloc(s, gfpflags, node, addr, c);
 
 	else {
@@ -2429,6 +2450,7 @@ redo:
 		 * against code executing on this cpu *not* from access by
 		 * other cpus.
 		 */
+    // 原子替换tid
 		if (unlikely(!this_cpu_cmpxchg_double(
 				s->cpu_slab->freelist, s->cpu_slab->tid,
 				object, tid,
@@ -3692,6 +3714,7 @@ static struct kmem_cache *find_mergeable(struct mem_cgroup *memcg, size_t size,
 		if (slab_unmergeable(s))
 			continue;
 
+    // 新的尺寸要比原来的小，才能复用
 		if (size > s->size)
 			continue;
 
@@ -3704,6 +3727,7 @@ static struct kmem_cache *find_mergeable(struct mem_cgroup *memcg, size_t size,
 		if ((s->size & ~(align - 1)) != s->size)
 			continue;
 
+    // 两者只差要比void*指针大小小才能复用
 		if (s->size - size >= sizeof(void *))
 			continue;
 
@@ -3721,6 +3745,7 @@ __kmem_cache_alias(struct mem_cgroup *memcg, const char *name, size_t size,
 {
 	struct kmem_cache *s;
 
+  // 检查是否能复用
 	s = find_mergeable(memcg, size, align, flags, name, ctor);
 	if (s) {
 		s->refcount++;
