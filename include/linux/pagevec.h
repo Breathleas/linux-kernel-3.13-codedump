@@ -14,9 +14,12 @@
 struct page;
 struct address_space;
 
+// LRU缓存
 struct pagevec {
+  // 当前数量
 	unsigned long nr;
 	unsigned long cold;
+  // 指针数组，每一项都可以指向一个页描述符，默认大小是14
 	struct page *pages[PAGEVEC_SIZE];
 };
 

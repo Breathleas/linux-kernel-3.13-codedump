@@ -159,15 +159,23 @@ enum zone_stat_item {
  * This has to be kept in sync with the statistics in zone_stat_item
  * above and the descriptions in vmstat_text in mm/vmstat.c
  */
+// LRU_BASE开始的是匿名页，LRU_FILE开始的是文件映射
 #define LRU_BASE 0
 #define LRU_ACTIVE 1
 #define LRU_FILE 2
 
+// 用于内存回收的LRU链表类型
 enum lru_list {
+  // 不活跃的匿名页
 	LRU_INACTIVE_ANON = LRU_BASE,
+  // 活跃的匿名页
 	LRU_ACTIVE_ANON = LRU_BASE + LRU_ACTIVE,
+  // 不活跃的文件映射
 	LRU_INACTIVE_FILE = LRU_BASE + LRU_FILE,
+  // 活跃的文件映射
 	LRU_ACTIVE_FILE = LRU_BASE + LRU_FILE + LRU_ACTIVE,
+  // 被锁在内存中禁止换出的进程页(包括以上两种页)
+  // 如果page结构体的flags中PG_lru和PG_mlocked都置位，说明此页是处于lru链表中的LRU_UNEVICTABLE链表上
 	LRU_UNEVICTABLE,
 	NR_LRU_LISTS
 };

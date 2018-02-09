@@ -24,7 +24,9 @@
  * the anon_vma object itself: we're guaranteed no page can be
  * pointing to this anon_vma once its vma list is empty.
  */
+/* 匿名线性区描述符，每个匿名vma都会有一个这个结构 */
 struct anon_vma {
+  /* 指向此anon_vma所属的root */
 	struct anon_vma *root;		/* Root of this anon_vma tree */
 	struct rw_semaphore rwsem;	/* W: modification, R: walking the list */
 	/*
@@ -44,6 +46,7 @@ struct anon_vma {
 	 * is serialized by a system wide lock only visible to
 	 * mm_take_all_locks() (mm_all_locks_mutex).
 	 */
+  /* 红黑树的根，用于存放引用了此anon_vma所属线性区中的页的其他线性区，用于匿名页反向映射 */
 	struct rb_root rb_root;	/* Interval tree of private "related" vmas */
 };
 
@@ -61,9 +64,13 @@ struct anon_vma {
  * which link all the VMAs associated with this anon_vma.
  */
 struct anon_vma_chain {
+  /* 此结构所属的vma */
 	struct vm_area_struct *vma;
+  /* 此结构加入的红黑树所属的anon_vma */
 	struct anon_vma *anon_vma;
+  /* 用于加入到所属vma的anon_vma_chain链表中 */
 	struct list_head same_vma;   /* locked by mmap_sem & page_table_lock */
+  /* 用于加入到其他进程或者本进程vma的anon_vma的红黑树中 */
 	struct rb_node rb;			/* locked by anon_vma->rwsem */
 	unsigned long rb_subtree_last;
 #ifdef CONFIG_DEBUG_VM_RB
