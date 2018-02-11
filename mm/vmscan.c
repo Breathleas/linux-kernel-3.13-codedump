@@ -2185,6 +2185,7 @@ static int inactive_list_is_low(struct lruvec *lruvec, enum lru_list lru)
  * nr_to_scan: 需要扫描的页框数量，此值 <= 32，当链表长度不足32时，就为链表长度
  * lruvec: lru链表描述符，与lru参数结合就得出待处理的lru链表
  * sc: 扫描控制结构
+ * 返回值：回收的页面数量
  */
 static unsigned long shrink_list(enum lru_list lru, unsigned long nr_to_scan,
 				 struct lruvec *lruvec, struct scan_control *sc)
@@ -2264,6 +2265,7 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 		force_scan = true;
 
 	/* If we have no swap space, do not bother scanning anon pages. */
+  // 如果禁用了swap或者没有swap空间，就只扫描文件页
 	if (!sc->may_swap || (get_nr_swap_pages() <= 0)) {
 		scan_balance = SCAN_FILE;
 		goto out;
@@ -2276,6 +2278,7 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	 * using the memory controller's swap limit feature would be
 	 * too expensive.
 	 */
+  // 如果不是全局页回收且swappiness为0，只扫描文件
 	if (!global_reclaim(sc) && !vmscan_swappiness(sc)) {
 		scan_balance = SCAN_FILE;
 		goto out;
@@ -2286,13 +2289,16 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	 * system is close to OOM, scan both anon and file equally
 	 * (unless the swappiness setting disagrees with swapping).
 	 */
+  // 如果priority已经为0，也就是内存接近耗尽，需要尽最大努力回收
 	if (!sc->priority && vmscan_swappiness(sc)) {
 		scan_balance = SCAN_EQUAL;
 		goto out;
 	}
 
+  // 匿名页数量
 	anon  = get_lru_size(lruvec, LRU_ACTIVE_ANON) +
 		get_lru_size(lruvec, LRU_INACTIVE_ANON);
+  // 文件映射数量
 	file  = get_lru_size(lruvec, LRU_ACTIVE_FILE) +
 		get_lru_size(lruvec, LRU_INACTIVE_FILE);
 
@@ -2302,9 +2308,11 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	 * to swap.  Better start now and leave the - probably heavily
 	 * thrashing - remaining file pages alone.
 	 */
-	if (global_reclaim(sc)) {
+	if (global_reclaim(sc)) { // 全局页回收
+    // 所有空闲内存
 		free = zone_page_state(zone, NR_FREE_PAGES);
 		if (unlikely(file + free <= high_wmark_pages(zone))) {
+      // 空闲页和文件页加起来都不够HIGH阈值的内存，必须尝试匿名页回收
 			scan_balance = SCAN_ANON;
 			goto out;
 		}
@@ -2315,16 +2323,19 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	 * anything from the anonymous working set right now.
 	 */
 	if (!inactive_file_is_low(lruvec)) {
+    // 如果不活跃的文件链表比较充裕，则回收文件页内存
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
 
+  // 到了这里就是按照比例来回收
 	scan_balance = SCAN_FRACT;
 
 	/*
 	 * With swappiness at 100, anonymous and file have the same priority.
 	 * This scanning priority is essentially the inverse of IO cost.
 	 */
+  // 计算匿名页和文件页的比例
 	anon_prio = vmscan_swappiness(sc);
 	file_prio = 200 - anon_prio;
 

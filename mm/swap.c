@@ -677,6 +677,7 @@ void lru_add_drain_cpu(int cpu)
 {
 	struct pagevec *pvec = &per_cpu(lru_add_pvec, cpu);
 
+  // pagevec已经满了，批量将这些page加入到LRU中
 	if (pagevec_count(pvec))
 		__pagevec_lru_add(pvec);
 

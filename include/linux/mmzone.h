@@ -809,6 +809,8 @@ extern struct page *mem_map;
 struct bootmem_data;
 typedef struct pglist_data {
   // 该节点内的内存区。可能的区域类型用zone_type表示。
+  // X86中有ZONE_HIGHMEN,ZONE_NORMAL,ZONE_DMA
+  // X86_64中有DMA，DMA32，NORMALZONE_HIGHMEN,ZONE_NORMAL,ZONE_ZONEDMA
 	struct zone node_zones[MAX_NR_ZONES];
   // 该节点的备用内存区。当节点没有可用内存时，就从备用区中分配内存。
 	struct zonelist node_zonelists[MAX_ZONELISTS];
@@ -816,6 +818,7 @@ typedef struct pglist_data {
 	int nr_zones;
 #ifdef CONFIG_FLAT_NODE_MEM_MAP	/* means !SPARSEMEM */
   // 在平坦型的内存模型中，它指向本节点第一个页面的描述符。
+  // 即在全局page数组变量mem_map中的地址
 	struct page *node_mem_map;
 #ifdef CONFIG_MEMCG
 	struct page_cgroup *node_page_cgroup;
