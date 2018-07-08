@@ -189,19 +189,24 @@ bool ip_call_ra_chain(struct sk_buff *skb)
 
 static int ip_local_deliver_finish(struct sk_buff *skb)
 {
+  // 获得设备的网络空间
 	struct net *net = dev_net(skb->dev);
 
+  // 取得网络层报文头部
 	__skb_pull(skb, skb_network_header_len(skb));
 
 	rcu_read_lock();
 	{
+    // 得到传输层协议
 		int protocol = ip_hdr(skb)->protocol;
 		const struct net_protocol *ipprot;
 		int raw;
 
 	resubmit:
+    // 将数据包传递给对应的原始套接字
 		raw = raw_local_deliver(skb, protocol);
 
+    // 得到注册协议
 		ipprot = rcu_dereference(inet_protos[protocol]);
 		if (ipprot != NULL) {
 			int ret;
@@ -213,6 +218,7 @@ static int ip_local_deliver_finish(struct sk_buff *skb)
 				}
 				nf_reset(skb);
 			}
+      // 调用协议的处理函数
 			ret = ipprot->handler(skb);
 			if (ret < 0) {
 				protocol = -ret;
@@ -220,7 +226,7 @@ static int ip_local_deliver_finish(struct sk_buff *skb)
 			}
 			IP_INC_STATS_BH(net, IPSTATS_MIB_INDELIVERS);
 		} else {
-			if (!raw) {
+			if (!raw) { // 没有对应的网络协议
 				if (xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 					IP_INC_STATS_BH(net, IPSTATS_MIB_INUNKNOWNPROTOS);
 					icmp_send(skb, ICMP_DEST_UNREACH,

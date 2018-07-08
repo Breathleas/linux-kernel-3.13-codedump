@@ -167,13 +167,16 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 		nexthop = inet_opt->opt.faddr;
 	}
 
+  // 保存源端口和目标端口
 	orig_sport = inet->inet_sport;
 	orig_dport = usin->sin_port;
 	fl4 = &inet->cork.fl.u.ip4;
+  // 查找路由
 	rt = ip_route_connect(fl4, nexthop, inet->inet_saddr,
 			      RT_CONN_FLAGS(sk), sk->sk_bound_dev_if,
 			      IPPROTO_TCP,
 			      orig_sport, orig_dport, sk, true);
+  // 查找路由失败返回错误
 	if (IS_ERR(rt)) {
 		err = PTR_ERR(rt);
 		if (err == -ENETUNREACH)
@@ -181,18 +184,23 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 		return err;
 	}
 
+  // 如果路由是多播或广播路由，则返回错误
 	if (rt->rt_flags & (RTCF_MULTICAST | RTCF_BROADCAST)) {
 		ip_rt_put(rt);
 		return -ENETUNREACH;
 	}
 
+  // 如果没有IP选项或者没有设置严格路由，那么目的地址即为路由结果的目的地址
 	if (!inet_opt || !inet_opt->opt.srr)
 		daddr = fl4->daddr;
 
+  // 如果没有设置源地址，则使用路由结果的源地址
 	if (!inet->inet_saddr)
 		inet->inet_saddr = fl4->saddr;
 	inet->inet_rcv_saddr = inet->inet_saddr;
 
+  // 如果保存的TCP选项有时间戳，并且目的地址与要连接的地址不同
+  // 则需要重置时间戳及相关变量
 	if (tp->rx_opt.ts_recent_stamp && inet->inet_daddr != daddr) {
 		/* Reset inherited state */
 		tp->rx_opt.ts_recent	   = 0;
@@ -201,17 +209,22 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 			tp->write_seq	   = 0;
 	}
 
+  // 允许快速重用套接字，并且如果上次连接的目的地址与这次相同，但没有时间戳信息
+  // ，则尝试从对端peer中获得时间戳信息
 	if (tcp_death_row.sysctl_tw_recycle &&
 	    !tp->rx_opt.ts_recent_stamp && fl4->daddr == daddr)
 		tcp_fetch_timewait_stamp(sk, &rt->dst);
 
+  // 设置目的端口和地址
 	inet->inet_dport = usin->sin_port;
 	inet->inet_daddr = daddr;
 
+  // 设置IP头的选项长度
 	inet_csk(sk)->icsk_ext_hdr_len = 0;
 	if (inet_opt)
 		inet_csk(sk)->icsk_ext_hdr_len = inet_opt->opt.optlen;
 
+  // 初始化MSS
 	tp->rx_opt.mss_clamp = TCP_MSS_DEFAULT;
 
 	/* Socket identity is still unknown (sport may be zero).
@@ -219,11 +232,14 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	 * lock select source port, enter ourselves into the hash tables and
 	 * complete initialization after this.
 	 */
+  // 设置TCP的状态为SYN_SENT，即发送了SYN包
 	tcp_set_state(sk, TCP_SYN_SENT);
+  // 将套接字加入hash表中，并分配源端口
 	err = inet_hash_connect(&tcp_death_row, sk);
 	if (err)
 		goto failure;
 
+  // 检查源端口或目的端口是否发生了变化，如果发生了变化则重新查找路由
 	rt = ip_route_newports(fl4, rt, orig_sport, orig_dport,
 			       inet->inet_sport, inet->inet_dport, sk);
 	if (IS_ERR(rt)) {
@@ -235,12 +251,14 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	sk->sk_gso_type = SKB_GSO_TCPV4;
 	sk_setup_caps(sk, &rt->dst);
 
+  // 如果没有设置初始化序列号，则根据双方地址，随机生成序列号
 	if (!tp->write_seq && likely(!tp->repair))
 		tp->write_seq = secure_tcp_sequence_number(inet->inet_saddr,
 							   inet->inet_daddr,
 							   inet->inet_sport,
 							   usin->sin_port);
 
+  // 根据初始序列号和当前时间，生成inet_id，该ID用于生成IP报文的ID值
 	inet->inet_id = tp->write_seq ^ jiffies;
 
 	err = tcp_connect(sk);
@@ -1941,19 +1959,24 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	int ret;
 	struct net *net = dev_net(skb->dev);
 
+  // 如果不是给本机的就drop掉
 	if (skb->pkt_type != PACKET_HOST)
 		goto discard_it;
 
 	/* Count it even if it's bad */
 	TCP_INC_STATS_BH(net, TCP_MIB_INSEGS);
 
+  // 数据包应该至少有一个TCP报文头部长度
 	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
 		goto discard_it;
 
+  // 得到TCP报文头部
 	th = tcp_hdr(skb);
 
+  // 检查TCP的数据偏移，至少比头部大
 	if (th->doff < sizeof(struct tcphdr) / 4)
 		goto bad_packet;
+  // 检查数据段长度
 	if (!pskb_may_pull(skb, th->doff * 4))
 		goto discard_it;
 
@@ -1961,11 +1984,15 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	 * Packet length and doff are validated by header prediction,
 	 * provided case of th->doff==0 is eliminated.
 	 * So, we defer the checks. */
+  // 计算校验和
 	if (!skb_csum_unnecessary(skb) && tcp_v4_checksum_init(skb))
 		goto csum_error;
 
+  // 重新得到TCP头部，因为前面的代码可能会重新分配skb
 	th = tcp_hdr(skb);
+  // 得到IP头部
 	iph = ip_hdr(skb);
+  // 得到TCP控制块的序列号，结束序列号，确认序列号
 	TCP_SKB_CB(skb)->seq = ntohl(th->seq);
 	TCP_SKB_CB(skb)->end_seq = (TCP_SKB_CB(skb)->seq + th->syn + th->fin +
 				    skb->len - th->doff * 4);
@@ -1974,29 +2001,37 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	TCP_SKB_CB(skb)->ip_dsfield = ipv4_get_dsfield(iph);
 	TCP_SKB_CB(skb)->sacked	 = 0;
 
+  // 根据端口信息，找到对应的sock结构
+  // 这里先对已经连接的sock进行查找，然后对监听的sock进行查找
 	sk = __inet_lookup_skb(&tcp_hashinfo, skb, th->source, th->dest);
 	if (!sk)
 		goto no_tcp_socket;
 
 process:
+  // 如果sock处于TIME_WAIT状态，则跳转到do_time_wait
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
 
+  // 如果数据包的TTL小于设置的TTL值，则丢弃
 	if (unlikely(iph->ttl < inet_sk(sk)->min_ttl)) {
 		NET_INC_STATS_BH(net, LINUX_MIB_TCPMINTTLDROP);
 		goto discard_and_relse;
 	}
 
+  // xfrm策略失败
 	if (!xfrm4_policy_check(sk, XFRM_POLICY_IN, skb))
 		goto discard_and_relse;
 	nf_reset(skb);
 
+  // 执行socket过滤
 	if (sk_filter(sk, skb))
 		goto discard_and_relse;
 
 	sk_mark_napi_id(sk, skb);
+  // 重置数据包的网卡信息
 	skb->dev = NULL;
 
+  // 锁住sock，获得控制权
 	bh_lock_sock_nested(sk);
 	ret = 0;
 	if (!sock_owned_by_user(sk)) {

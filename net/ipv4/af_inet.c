@@ -205,12 +205,15 @@ int inet_listen(struct socket *sock, int backlog)
 		goto out;
 
 	old_state = sk->sk_state;
+  // 如果套接字状态不是未连接或不是基于流的套接字，则返回错误
 	if (!((1 << old_state) & (TCPF_CLOSE | TCPF_LISTEN)))
 		goto out;
 
 	/* Really, if the socket is already in listen state
 	 * we can only allow the backlog to be adjusted.
 	 */
+  // 如果当前已经是监听状态了，只需改变backlog的值
+  // 如果是关闭状态，则需要真正的监听操作
 	if (old_state != TCP_LISTEN) {
 		/* Check special setups for testing purpose to enable TFO w/o
 		 * requiring TCP_FASTOPEN sockopt.
@@ -444,9 +447,11 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		goto out;
 	}
 	err = -EINVAL;
+  // 检查地址长度
 	if (addr_len < sizeof(struct sockaddr_in))
 		goto out;
 
+  // 检查协议族
 	if (addr->sin_family != AF_INET) {
 		/* Compatibility games : accept AF_UNSPEC (mapped to AF_INET)
 		 * only if s_addr is INADDR_ANY.
@@ -477,6 +482,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	snum = ntohs(addr->sin_port);
 	err = -EACCES;
+  // 如果端口号小于PROT_SOCK（1024），则检查是有权限
 	if (snum && snum < PROT_SOCK &&
 	    !ns_capable(net->user_ns, CAP_NET_BIND_SERVICE))
 		goto out;
@@ -492,14 +498,18 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	/* Check these errors (active socket, double bind). */
 	err = -EINVAL;
+  // 确保是CLOSE状态，不会被bind两次
 	if (sk->sk_state != TCP_CLOSE || inet->inet_num)
 		goto out_release_sock;
 
+  // 使用参数设置套接字的接收和发送地址
 	inet->inet_rcv_saddr = inet->inet_saddr = addr->sin_addr.s_addr;
+  // 如果参数地址是多播或广播地址，则重置发送源地址为0，表示在发送时使用的是设备地址
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->inet_saddr = 0;  /* Use device */
 
 	/* Make sure we are allowed to bind here. */
+  // 确保可以bind到这个端口来
 	if (sk->sk_prot->get_port(sk, snum)) {
 		inet->inet_saddr = inet->inet_rcv_saddr = 0;
 		err = -EADDRINUSE;
@@ -574,6 +584,7 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	int err;
 	long timeo;
 
+  // 地址长度检查
 	if (addr_len < sizeof(uaddr->sa_family))
 		return -EINVAL;
 
@@ -583,28 +594,36 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 		goto out;
 	}
 
+  // 因为STREAM协议是有连接状态的，所以需要对套接字进行状态检查
 	switch (sock->state) {
 	default:
 		err = -EINVAL;
 		goto out;
+    // 连接已经建立，返回EISCONN
 	case SS_CONNECTED:
 		err = -EISCONN;
 		goto out;
+    // 正在连接中，返回EALREADY
 	case SS_CONNECTING:
 		err = -EALREADY;
 		/* Fall out of switch with err, set for this state */
 		break;
+    // 未连接状态
 	case SS_UNCONNECTED:
 		err = -EISCONN;
+    // 当前状态不是CLOSE则报错
 		if (sk->sk_state != TCP_CLOSE)
 			goto out;
 
+    // 调用该协议注册的connect接口，TCP协议是 tcp_v4_connect函数
 		err = sk->sk_prot->connect(sk, uaddr, addr_len);
 		if (err < 0)
 			goto out;
 
+    // 标记状态是CONNECTING
 		sock->state = SS_CONNECTING;
 
+    // 返回错误码EINPROGRESS
 		/* Just entered SS_CONNECTING state; the only
 		 * difference is that return value in non-blocking
 		 * case is EINPROGRESS, rather than EALREADY.
@@ -613,18 +632,24 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 		break;
 	}
 
+  // 检查是否需要连接超时，若设置了非阻塞标志，则timeo为假
+  // 若设置了阻塞标志，则timeo为真
 	timeo = sock_sndtimeo(sk, flags & O_NONBLOCK);
 
+  // 当前连接状态是正在连接的状态（即刚发送了syn或者收到了syn包）
 	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
 		int writebias = (sk->sk_protocol == IPPROTO_TCP) &&
 				tcp_sk(sk)->fastopen_req &&
 				tcp_sk(sk)->fastopen_req->data ? 1 : 0;
 
 		/* Error code is set above */
+    // 如果没有超时标志，或者连接超时失败，则返回
 		if (!timeo || !inet_wait_for_connect(sk, timeo, writebias))
 			goto out;
 
+    // 判断是否由于信号导致等待连接退出
 		err = sock_intr_errno(timeo);
+    // 如果有未处理的信号，则返回失败，表示信号中断了连接
 		if (signal_pending(current))
 			goto out;
 	}
@@ -632,6 +657,7 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	/* Connection was closed by RST, timeout, ICMP error
 	 * or another process disconnected us.
 	 */
+  // 连接被关闭了，原因可能是对端RST，超时等
 	if (sk->sk_state == TCP_CLOSE)
 		goto sock_error;
 
@@ -674,6 +700,7 @@ int inet_accept(struct socket *sock, struct socket *newsock, int flags)
 {
 	struct sock *sk1 = sock->sk;
 	int err = -EINVAL;
+  // 执行具体协议的accept函数，并得到新的sock结构
 	struct sock *sk2 = sk1->sk_prot->accept(sk1, flags, &err);
 
 	if (!sk2)
@@ -681,13 +708,16 @@ int inet_accept(struct socket *sock, struct socket *newsock, int flags)
 
 	lock_sock(sk2);
 
+  // 记录RFS信息
 	sock_rps_record_flow(sk2);
 	WARN_ON(!((1 << sk2->sk_state) &
 		  (TCPF_ESTABLISHED | TCPF_SYN_RECV |
 		  TCPF_CLOSE_WAIT | TCPF_CLOSE)));
 
+  // 将新的sock与调用者传递的socket关联起来
 	sock_graft(sk2, newsock);
 
+  // 设置socket为连接状态
 	newsock->state = SS_CONNECTED;
 	err = 0;
 	release_sock(sk2);

@@ -300,28 +300,35 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
 	struct request_sock *req;
 	int error;
 
+  // 获得sk的控制权
 	lock_sock(sk);
 
 	/* We need to make sure that this socket is listening,
 	 * and that it has something pending.
 	 */
 	error = -EINVAL;
+  // 不是监听状态则报错
 	if (sk->sk_state != TCP_LISTEN)
 		goto out_err;
 
 	/* Find already established connection */
+  // 已连接队列为空
 	if (reqsk_queue_empty(queue)) {
+    // 得到sk的超时时间
 		long timeo = sock_rcvtimeo(sk, flags & O_NONBLOCK);
 
 		/* If this is a non blocking socket don't sleep */
 		error = -EAGAIN;
+    // 如果超时为0，即非阻塞，则报错退出
 		if (!timeo)
 			goto out_err;
 
+    // 以timeo为超时时间，等待一个新的连接
 		error = inet_csk_wait_for_connect(sk, timeo);
 		if (error)
 			goto out_err;
 	}
+  // 从已连接队列删除一个数据返回
 	req = reqsk_queue_remove(queue);
 	newsk = req->sk;
 
@@ -744,11 +751,13 @@ int inet_csk_listen_start(struct sock *sk, const int nr_table_entries)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
+  // 为连接请求队列创建空间
 	int rc = reqsk_queue_alloc(&icsk->icsk_accept_queue, nr_table_entries);
 
 	if (rc != 0)
 		return rc;
 
+  // 初始化
 	sk->sk_max_ack_backlog = 0;
 	sk->sk_ack_backlog = 0;
 	inet_csk_delack_init(sk);
@@ -758,17 +767,25 @@ int inet_csk_listen_start(struct sock *sk, const int nr_table_entries)
 	 * It is OK, because this socket enters to hash table only
 	 * after validation is complete.
 	 */
+  // 虽然这里先将连接的状态设为了监听，看似有一个时间窗口。
+  // 但实际上只有在get_port成功以后，该套接字才被加入哈希表中。
+  // 从系统的角度看，套接字加入到哈希表中，才会真正处于监听状态，
+  // 可以接受连接请求了，因此实际上没有发生竞争。
 	sk->sk_state = TCP_LISTEN;
+  // 调用get_port函数进行端口绑定
 	if (!sk->sk_prot->get_port(sk, inet->inet_num)) {
+    // 设置源端口
 		inet->inet_sport = htons(inet->inet_num);
-
+    // 清除路由缓存
 		sk_dst_reset(sk);
+    // 将套接字加入到哈希表中，这时才可以接受新连接
 		sk->sk_prot->hash(sk);
 
 		return 0;
 	}
-
+  // 绑定端口失败，则设置连接为关闭状态
 	sk->sk_state = TCP_CLOSE;
+  // 释放连接请求队列空间
 	__reqsk_queue_destroy(&icsk->icsk_accept_queue);
 	return -EADDRINUSE;
 }

@@ -407,18 +407,28 @@ int pagecache_write_end(struct file *, struct address_space *mapping,
 
 struct backing_dev_info;
 struct address_space {
+  // 指向拥有该对象的inode指针
 	struct inode		*host;		/* owner: inode, block_device */
+  // 表示拥有者的页基树的根
 	struct radix_tree_root	page_tree;	/* radix tree of all pages */
+  // 保护基树的自旋锁
 	spinlock_t		tree_lock;	/* and lock protecting it */
+  // 地址空间中共享内存映射的个数
 	unsigned int		i_mmap_writable;/* count VM_SHARED mappings */
+  // 
 	struct rb_root		i_mmap;		/* tree of private and shared mappings */
+  // 地址空间中非线性空间
 	struct list_head	i_mmap_nonlinear;/*list VM_NONLINEAR mappings */
 	struct mutex		i_mmap_mutex;	/* protect tree, count, list */
 	/* Protected by tree_lock together with the radix tree */
+  // 所有者的页总数
 	unsigned long		nrpages;	/* number of total pages */
+  // 最后一次回写操作所作用的页索引
 	pgoff_t			writeback_index;/* writeback starts here */
 	const struct address_space_operations *a_ops;	/* methods */
+  // 错误位和内存分配标志
 	unsigned long		flags;		/* error bits/gfp mask */
+  // 指向拥有者的数据所在块设备
 	struct backing_dev_info *backing_dev_info; /* device readahead, etc */
 	spinlock_t		private_lock;	/* for use by the address_space */
 	struct list_head	private_list;	/* ditto */
