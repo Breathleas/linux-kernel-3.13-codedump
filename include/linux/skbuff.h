@@ -407,12 +407,16 @@ typedef unsigned char *sk_buff_data_t;
 
 struct sk_buff {
 	/* These two members must be first. */
+  // sk_buff双链表
 	struct sk_buff		*next;
 	struct sk_buff		*prev;
 
+  // 数据包到达时间
 	ktime_t			tstamp;
 
+  // 所属的sock指针
 	struct sock		*sk;
+  // 对应的网络设备
 	struct net_device	*dev;
 
 	/*
@@ -427,8 +431,10 @@ struct sk_buff {
 #ifdef CONFIG_XFRM
 	struct	sec_path	*sp;
 #endif
+  // len为实际数据长度，data len为数据长度
 	unsigned int		len,
 				data_len;
+  // mac_len为数据链路层长度，hdr_len为克隆的skb可写头部长度
 	__u16			mac_len,
 				hdr_len;
 	union {
@@ -438,8 +444,12 @@ struct sk_buff {
 			__u16	csum_offset;
 		};
 	};
+  // 报的优先级队列
 	__u32			priority;
 	kmemcheck_bitfield_begin(flags1);
+  // 一些标志位
+  // local_df：允许本地分片
+  // nohdr：只能引用其payload
 	__u8			local_df:1,
 				cloned:1,
 				ip_summed:2,
@@ -461,6 +471,7 @@ struct sk_buff {
 	struct nf_bridge_info	*nf_bridge;
 #endif
 
+  // 由哪个interface到达的
 	int			skb_iif;
 
 	__u32			rxhash;

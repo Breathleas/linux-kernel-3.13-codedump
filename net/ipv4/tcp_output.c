@@ -859,6 +859,7 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 
 	BUG_ON(!skb || !tcp_skb_pcount(skb));
 
+  // 判断是否需要克隆这个数据包
 	if (clone_it) {
 		const struct sk_buff *fclone = skb + 1;
 
@@ -873,6 +874,8 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 			NET_INC_STATS_BH(sock_net(sk),
 					 LINUX_MIB_TCPSPURIOUS_RTX_HOSTQUEUES);
 
+    // 如果这个数据包已经被克隆，则需要复制SKB的私有部分
+    // 如果没有克隆，则直接克隆该数据包
 		if (unlikely(skb_cloned(skb)))
 			skb = pskb_copy(skb, gfp_mask);
 		else
@@ -886,19 +889,24 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 	tcb = TCP_SKB_CB(skb);
 	memset(&opts, 0, sizeof(opts));
 
+  // 根据数据包的类型来计算TCP选项部分的大小
 	if (unlikely(tcb->tcp_flags & TCPHDR_SYN))
 		tcp_options_size = tcp_syn_options(sk, skb, &opts, &md5);
 	else
 		tcp_options_size = tcp_established_options(sk, skb, &opts,
 							   &md5);
+  // 得到完整的TCP首部大小
 	tcp_header_size = tcp_options_size + sizeof(struct tcphdr);
 
+  // 判断是否有未确认的数据包
 	if (tcp_packets_in_flight(tp) == 0)
+    // 通知开始发送事件
 		tcp_ca_event(sk, CA_EVENT_TX_START);
 
 	/* if no packet is in qdisc/device queue, then allow XPS to select
 	 * another queue.
 	 */
+  // 若设置了ooo_okay标志，则表明可以改变发送队列
 	skb->ooo_okay = sk_wmem_alloc_get(sk) == 0;
 
   // 为TCP报文保存空间
@@ -1847,24 +1855,33 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 	sent_pkts = 0;
 
 	if (!push_one) {
+    // 如果不是push ont模式（即只发送一个数据包），则进行MTU探测
 		/* Do MTU probing. */
 		result = tcp_mtu_probe(sk);
 		if (!result) {
+      // 如果返回0，则需要等待探测结果，因此不能发送数据包
 			return false;
 		} else if (result > 0) {
 			sent_pkts = 1;
 		}
 	}
 
+  // 将发送队列中的数据包发送出去
 	while ((skb = tcp_send_head(sk))) {
 		unsigned int limit;
 
+    // 初始化这个数据包的TSO状态，TSO是TCP Segmeng Offload的缩写。
+    // 当TCP发送数据时，需要将数据包拆分成MSS大小的数据包（即多个skb）
+    // 然后再增加TCP首部，IP首部即可。
+    // 而当网卡支持TSO时，内核只需要增加TCP首部即可，其余工作交由网卡来处理。
 		tso_segs = tcp_init_tso_segs(sk, skb, mss_now);
 		BUG_ON(!tso_segs);
 
 		if (unlikely(tp->repair) && tp->repair_queue == TCP_SEND_QUEUE)
 			goto repair; /* Skip network transmission */
 
+
+    // 计算拥塞窗口
 		cwnd_quota = tcp_cwnd_test(tp, skb);
 		if (!cwnd_quota) {
 			if (push_one == 2)
@@ -1874,15 +1891,19 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 				break;
 		}
 
+    // 检查发送窗口，若为0则不能发送
 		if (unlikely(!tcp_snd_wnd_test(tp, skb, mss_now)))
 			break;
 
 		if (tso_segs == 1) {
+      // 如果只有一个TSO数据段，进行nagle算法检查，若返回0则不发送
 			if (unlikely(!tcp_nagle_test(tp, skb, mss_now,
 						     (tcp_skb_is_last(sk, skb) ?
 						      nonagle : TCP_NAGLE_PUSH))))
 				break;
 		} else {
+      // 多个TSO数据段
+      // 如果没有设置push_one标志并且TSO发送算法判断推迟发送，则暂时不发送这个数据段
 			if (!push_one && tcp_tso_should_defer(sk, skb))
 				break;
 		}
@@ -1916,8 +1937,10 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		    unlikely(tso_fragment(sk, skb, limit, mss_now, gfp)))
 			break;
 
+    // 更新TCP控制块的时间
 		TCP_SKB_CB(skb)->when = tcp_time_stamp;
 
+    // 发送数据包
 		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
 			break;
 
@@ -1925,16 +1948,21 @@ repair:
 		/* Advance the send_head.  This one is sent out.
 		 * This call will increment packets_out.
 		 */
+    // 处理发送新数据事件，如调整发送队列，则重置重传定时器
 		tcp_event_new_data_sent(sk, skb);
 
+    // 更新小包（即小于MSS大小）的发送时间
 		tcp_minshall_update(tp, mss_now, skb);
+    // 更新发送数据包的数量
 		sent_pkts += tcp_skb_pcount(skb);
 
+    // 如果设置了push one标志就直接退出
 		if (push_one)
 			break;
 	}
 
 	if (likely(sent_pkts)) {
+    // 如果当前处于拥塞恢复的状态，则增加这个状态下的发包数量
 		if (tcp_in_cwnd_reduction(sk))
 			tp->prr_out += sent_pkts;
 

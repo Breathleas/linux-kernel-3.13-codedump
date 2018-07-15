@@ -427,6 +427,7 @@ static inline void get_huge_page_tail(struct page *page)
 
 extern bool __get_page_tail(struct page *page);
 
+// 增加引用计数
 static inline void get_page(struct page *page)
 {
 	if (unlikely(PageTail(page)))

@@ -1049,14 +1049,20 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		offset = copied_syn;
 	}
 
+  // 根据标志，确定发送消息的超时时间
+  // 如果设置了DONTWAIT，则超时时间为0
+  // 否则，使用套接字的超时时间
 	timeo = sock_sndtimeo(sk, flags & MSG_DONTWAIT);
 
 	/* Wait for a connection to finish. One exception is TCP Fast Open
 	 * (passive side) where data is allowed to be sent before a connection
 	 * is fully established.
 	 */
+  // 套接字只有处于已连接状态（ESTABLISH）和等待关闭（CLOSE_WAIT）状态下，才能
+  // 直接发送数据。
 	if (((1 << sk->sk_state) & ~(TCPF_ESTABLISHED | TCPF_CLOSE_WAIT)) &&
 	    !tcp_passive_fastopen(sk)) {
+    // 等待连接建立
 		if ((err = sk_stream_wait_connect(sk, &timeo)) != 0)
 			goto do_error;
 	}
@@ -1075,8 +1081,10 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	}
 
 	/* This should be in poll */
+  // 清除SOCK_ASYNC_NOSPACE标志位
 	clear_bit(SOCK_ASYNC_NOSPACE, &sk->sk_socket->flags);
 
+  // 得到当前MSS长度和数据包的最大长度
 	mss_now = tcp_send_mss(sk, &size_goal, flags);
 
 	/* Ok commence sending. */
@@ -1088,9 +1096,12 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto out_err;
 
+  // 判断出口路由是否支持分散聚合功能
 	sg = !!(sk->sk_route_caps & NETIF_F_SG);
 
+  // 逐个发送数据
 	while (--iovlen >= 0) {
+    // 得到该数据段的长度及起始地址
 		size_t seglen = iov->iov_len;
 		unsigned char __user *from = iov->iov_base;
 
@@ -1105,29 +1116,38 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 			offset = 0;
 		}
 
+    // 循环保证本数据段的数据全部被发送
 		while (seglen > 0) {
 			int copy = 0;
+      // 获得数据包的最大长度
 			int max = size_goal;
 
+      // 获得发送队列尾部的skb，查看是否还有剩余空间
 			skb = tcp_write_queue_tail(sk);
 			if (tcp_send_head(sk)) {
 				if (skb->ip_summed == CHECKSUM_NONE)
 					max = mss_now;
+        // 得到本次需要复制的长度
 				copy = max - skb->len;
 			}
 
+      // 本数据包的长度已经超过了最大长度，需要申请新的skb
 			if (copy <= 0) {
 new_segment:
 				/* Allocate new segment. If the interface is SG,
 				 * allocate skb fitting to single page.
 				 */
+        // 检查发送缓存是否超出了限制
 				if (!sk_stream_memory_free(sk))
+          // 发送缓存占用太多内存，跳转到等待
 					goto wait_for_sndbuf;
 
+        // 申请新的skb
 				skb = sk_stream_alloc_skb(sk,
 							  select_size(sk, sg),
 							  sk->sk_allocation);
 				if (!skb)
+          // 如果分配失败，就继续等待
 					goto wait_for_memory;
 
 				/*
@@ -1143,44 +1163,59 @@ new_segment:
 				if (sk->sk_route_caps & NETIF_F_ALL_CSUM)
 					skb->ip_summed = CHECKSUM_PARTIAL;
 
+        // 加入套接字发送队列
 				skb_entail(sk, skb);
 				copy = size_goal;
 				max = size_goal;
 			}
 
 			/* Try to append data to the end of skb. */
+      // 复制长度不能超过数据长度
 			if (copy > seglen)
 				copy = seglen;
 
 			/* Where to copy to? */
+      // 判断skb的线性空间是否还有空间
 			if (skb_availroom(skb) > 0) {
 				/* We have some space in skb head. Superb! */
+        // 调整复制长度，不能超过空闲的空间长度
 				copy = min_t(int, copy, skb_availroom(skb));
+        // 将数据复制到skb的空闲空间中
 				err = skb_add_data_nocache(sk, skb, from, copy);
 				if (err)
 					goto do_fault;
 			} else {
+        // 如果没有足够的空闲的线性空间，把数据复制到分散聚合页中
 				bool merge = true;
+        // 获得数据的分片个数
 				int i = skb_shinfo(skb)->nr_frags;
+        // 获得套接字使用的页
 				struct page_frag *pfrag = sk_page_frag(sk);
 
 				if (!sk_page_frag_refill(sk, pfrag))
 					goto wait_for_memory;
 
+        // 判断数据包是否可以和最后一个分片聚合
 				if (!skb_can_coalesce(skb, i, pfrag->page,
 						      pfrag->offset)) {
 					if (i == MAX_SKB_FRAGS || !sg) {
+            // 已经达到分片上限，或者网络设备不支持分散聚合。这时不能向分片增加任何数据了。
+            // 为了给新数据腾出空间，需要将老数据尽快发送出去。
+            // 因此设置PUSH标志，并更新pushed_seq，然后跳转到new_segment，并申请新的skb
 						tcp_mark_push(tp, skb);
 						goto new_segment;
 					}
 					merge = false;
 				}
 
+        // 再次检查长度，不能超过该页的空闲长度
 				copy = min_t(int, copy, pfrag->size - pfrag->offset);
 
+        // 增加发送缓存内存占用，若超出限制，则需要等待
 				if (!sk_wmem_schedule(sk, copy))
 					goto wait_for_memory;
 
+        // 将数据复制到页的相应位置
 				err = skb_copy_to_page_nocache(sk, from, skb,
 							       pfrag->page,
 							       pfrag->offset,
@@ -1190,8 +1225,10 @@ new_segment:
 
 				/* Update the skb. */
 				if (merge) {
+          // 若本次数据可以和最后一个分片合并，则更新最后一个分片的长度
 					skb_frag_size_add(&skb_shinfo(skb)->frags[i - 1], copy);
 				} else {
+          // 这是新的分片，需要为这个分片初始化一些页信息
 					skb_fill_page_desc(skb, i, pfrag->page,
 							   pfrag->offset, copy);
 					get_page(pfrag->page);
@@ -1199,48 +1236,65 @@ new_segment:
 				pfrag->offset += copy;
 			}
 
+      // 如果没有复制任何数据，则清除push标志
 			if (!copied)
 				TCP_SKB_CB(skb)->tcp_flags &= ~TCPHDR_PSH;
 
+      // 更新各种序列号
 			tp->write_seq += copy;
 			TCP_SKB_CB(skb)->end_seq += copy;
 			skb_shinfo(skb)->gso_segs = 0;
 
+      // 更新复制信息
 			from += copy;
 			copied += copy;
+      // 判断是否完成了所有的数据拷贝
 			if ((seglen -= copy) == 0 && iovlen == 0)
 				goto out;
 
+      // 如果数据包的长度小于限制，或者设置了MSG_OOB标志，则继续向该数据包增加数据
 			if (skb->len < max || (flags & MSG_OOB) || unlikely(tp->repair))
 				continue;
 
+      // 如果当前序列号超过上次push的序列号加上通知窗口的一半，则需要将本次数据包尽快发送出去
 			if (forced_push(tp)) {
+        // 将本数据包设置上PUSH标志，并更新PUSH序列号
 				tcp_mark_push(tp, skb);
+        // 所有未决的数据包都全部发送出去
 				__tcp_push_pending_frames(sk, mss_now, TCP_NAGLE_PUSH);
 			} else if (skb == tcp_send_head(sk))
+        // 如果套接字只有当前这个数据包，就发送这一个数据包
 				tcp_push_one(sk, mss_now);
 			continue;
 
-wait_for_sndbuf:
+wait_for_sndbuf: // 等待发送缓存
+      // 设置没有发送缓存的标志
 			set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
-wait_for_memory:
+wait_for_memory: // 等待内存
 			if (copied)
+        // 如果已经复制了数据，去掉MBG_MORE标志，表示尽快将复制的数据发送出去
 				tcp_push(sk, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
 
+      // 等待空闲内存，可能进入睡眠状态
 			if ((err = sk_stream_wait_memory(sk, &timeo)) != 0)
 				goto do_error;
 
+      // 有了空闲内存，但MSS可能已经发生了变化，所以需要重新获取MSS
 			mss_now = tcp_send_mss(sk, &size_goal, flags);
 		}
 	}
 
+  // out是正常退出路径
 out:
+  // 如果复制了数据，则调用tcp_push将数据包发送出去，但不能保证立刻就发送
 	if (copied)
 		tcp_push(sk, flags, mss_now, tp->nonagle);
 	release_sock(sk);
 	return copied + copied_syn;
 
+  // 复制用户数据错误
 do_fault:
+  // 如果当前skb的长度为0，则需要从套接字的发送队列中将其删除，并释放该skb
 	if (!skb->len) {
 		tcp_unlink_write_queue(skb, sk);
 		/* It is the one place in all of TCP, except connection
