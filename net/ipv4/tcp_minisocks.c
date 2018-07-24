@@ -510,11 +510,16 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 
 	BUG_ON(fastopen == (sk->sk_state == TCP_LISTEN));
 
+  // 重置saw_tstamp，因为时间戳选项依赖于每个数据包
 	tmp_opt.saw_tstamp = 0;
-	if (th->doff > (sizeof(struct tcphdr)>>2)) {
+	if (th->doff > (sizeof(struct tcphdr)>>2)) { // 如果实际数据位置偏移量大于TCP固定包头长度，则表明该报文一定包含了TCP选项
+
+    // 解析TCP选项
 		tcp_parse_options(skb, &tmp_opt, 0, NULL);
 
+    // 判断是否有时间戳选项
 		if (tmp_opt.saw_tstamp) {
+      // 检查时间戳选项
 			tmp_opt.ts_recent = req->ts_recent;
 			/* We do not store true stamp, but it is not required,
 			 * it can be estimated (approximately)
@@ -552,6 +557,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 		 * Reset timer after retransmitting SYNACK, similar to
 		 * the idea of fast retransmit in recovery.
 		 */
+    // 这里判断出该SYN报为重传的SYN包，回复SYN+ACK
 		if (!inet_rtx_syn_ack(sk, req))
 			req->expires = min(TCP_TIMEOUT_INIT << req->num_timeout,
 					   TCP_RTO_MAX) + jiffies;
@@ -615,6 +621,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	 * elsewhere and is checked directly against the child socket rather
 	 * than req because user data may have been sent out.
 	 */
+  // 非法的ACK值
 	if ((flg & TCP_FLAG_ACK) && !fastopen &&
 	    (TCP_SKB_CB(skb)->ack_seq !=
 	     tcp_rsk(req)->snt_isn + 1))
@@ -626,12 +633,14 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	 */
 
 	/* RFC793: "first check sequence number". */
-
+  // 时间戳检查失败，或者序列号不在窗口范围内
 	if (paws_reject || !tcp_in_window(TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq,
 					  tcp_rsk(req)->rcv_nxt, tcp_rsk(req)->rcv_nxt + req->rcv_wnd)) {
 		/* Out of window: send ACK and drop. */
+    // 如果没有重置标志，则发送ACK确认
 		if (!(flg & TCP_FLAG_RST))
 			req->rsk_ops->send_ack(sk, skb, req);
+    // 如果时间戳检测失败，则增加相应的技术
 		if (paws_reject)
 			NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_PAWSESTABREJECTED);
 		return NULL;
@@ -639,9 +648,11 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 
 	/* In sequence, PAWS is OK. */
 
+  // 如果数据包为有序数据包，且包含时间戳选项，则更新已保存的最近时间戳
 	if (tmp_opt.saw_tstamp && !after(TCP_SKB_CB(skb)->seq, tcp_rsk(req)->rcv_nxt))
 		req->ts_recent = tmp_opt.rcv_tsval;
 
+  // 如果序列号在窗口之外，则去掉SYN标志
 	if (TCP_SKB_CB(skb)->seq == tcp_rsk(req)->rcv_isn) {
 		/* Truncate SYN, it is out of window starting
 		   at tcp_rsk(req)->rcv_isn + 1. */
@@ -651,6 +662,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	/* RFC793: "second check the RST bit" and
 	 *	   "fourth, check the SYN bit"
 	 */
+  // 检查RST标志和SYN标志，如果都设置了，则将当前半连接从队列中清除
 	if (flg & (TCP_FLAG_RST|TCP_FLAG_SYN)) {
 		TCP_INC_STATS_BH(sock_net(sk), TCP_MIB_ATTEMPTFAILS);
 		goto embryonic_reset;
@@ -662,6 +674,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	 * XXX (TFO) - if we ever allow "data after SYN", the
 	 * following check needs to be removed.
 	 */
+  // 如果没有设置ACK，则丢弃该包
 	if (!(flg & TCP_FLAG_ACK))
 		return NULL;
 
@@ -672,6 +685,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 		return sk;
 
 	/* While TCP_DEFER_ACCEPT is active, drop bare ACK. */
+  // 如果设置了延迟接收，则丢弃单独的ACK包
 	if (req->num_timeout < inet_csk(sk)->icsk_accept_queue.rskq_defer_accept &&
 	    TCP_SKB_CB(skb)->end_seq == tcp_rsk(req)->rcv_isn + 1) {
 		inet_rsk(req)->acked = 1;
@@ -685,13 +699,16 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	 * ESTABLISHED STATE. If it will be dropped after
 	 * socket is created, wait for troubles.
 	 */
+  // 至此，TCP三次握手已经完成。使用syn_recv_sock创建真正的套接字
 	child = inet_csk(sk)->icsk_af_ops->syn_recv_sock(sk, skb, req, NULL);
 	if (child == NULL)
 		goto listen_overflow;
 
+  // 新的套接字已经创建，因此原来的request sock可以从队列中删除
 	inet_csk_reqsk_queue_unlink(sk, req, prev);
 	inet_csk_reqsk_queue_removed(sk, req);
 
+  // 将套接字加入到已连接的队列中
 	inet_csk_reqsk_queue_add(sk, req, child);
 	return child;
 
@@ -739,10 +756,13 @@ int tcp_child_process(struct sock *parent, struct sock *child,
 	int ret = 0;
 	int state = child->sk_state;
 
+  // 检查sock是否正在被用户进程使用
 	if (!sock_owned_by_user(child)) {
+    // 用户进程没有占用sock的情况
 		ret = tcp_rcv_state_process(child, skb, tcp_hdr(skb),
 					    skb->len);
 		/* Wakeup parent, send SIGIO */
+    // 唤醒阻塞在父sock的任务
 		if (state == TCP_SYN_RECV && child->sk_state != state)
 			parent->sk_data_ready(parent, 0);
 	} else {
@@ -750,6 +770,7 @@ int tcp_child_process(struct sock *parent, struct sock *child,
 		 * in main socket hash table and lock on listening
 		 * socket does not protect us more.
 		 */
+    // 由于用户进程占用着sock，将数据包加入到backlog，以后再处理
 		__sk_add_backlog(child, skb);
 	}
 

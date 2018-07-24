@@ -556,10 +556,12 @@ static inline void syn_ack_recalc(struct request_sock *req, const int thresh,
 		  req->num_timeout >= rskq_defer_accept - 1;
 }
 
+// 重传SYN+ACK
 int inet_rtx_syn_ack(struct sock *parent, struct request_sock *req)
 {
 	int err = req->rsk_ops->rtx_syn_ack(parent, req);
 
+  // 重传统计+1
 	if (!err)
 		req->num_retrans++;
 	return err;

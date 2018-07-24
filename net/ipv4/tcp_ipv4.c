@@ -1477,6 +1477,7 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	int do_fastopen;
 
 	/* Never answer to SYNs send to broadcast or multicast */
+  // 不接受广播或多播的请求
 	if (skb_rtable(skb)->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
 		goto drop;
 
@@ -1496,11 +1497,13 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	 * clogging syn queue with openreqs with exponentially increasing
 	 * timeout.
 	 */
+  // 接收队列已满，且为第一个数据包
 	if (sk_acceptq_is_full(sk) && inet_csk_reqsk_queue_young(sk) > 1) {
 		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_LISTENOVERFLOWS);
 		goto drop;
 	}
 
+  // 申请一个请求sock
 	req = inet_reqsk_alloc(&tcp_request_sock_ops);
 	if (!req)
 		goto drop;
@@ -1509,6 +1512,7 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	tcp_rsk(req)->af_specific = &tcp_request_sock_ipv4_ops;
 #endif
 
+  // 解析TCP选项
 	tcp_clear_options(&tmp_opt);
 	tmp_opt.mss_clamp = TCP_MSS_DEFAULT;
 	tmp_opt.user_mss  = tp->rx_opt.user_mss;
@@ -1637,6 +1641,7 @@ EXPORT_SYMBOL(tcp_v4_conn_request);
  * The three way handshake has completed - we got a valid synack -
  * now create the new socket.
  */
+// 三次握手完毕，创建新的sock的回调函数
 struct sock *tcp_v4_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
 				  struct request_sock *req,
 				  struct dst_entry *dst)
@@ -1739,6 +1744,11 @@ static struct sock *tcp_v4_hnd_req(struct sock *sk, struct sk_buff *skb)
 	struct sock *nsk;
 	struct request_sock **prev;
 	/* Find possible connection requests. */
+
+  // 上次处理SYN请求时，已经将对应的request_sock加入到了队列中，
+  // 因此这次收到ACK答复时，是可以找到对应的request_sock的。
+  // 另外需要注意的是，这个函数还有一个输出值prev，其为返回值req前面的元素。
+  // 之所以返回这个prev值，是为了后面的tcp_check_req函数中，移除req时不需要再次进行查找
 	struct request_sock *req = inet_csk_search_req(sk, &prev, th->source,
 						       iph->saddr, iph->daddr);
 	if (req)
@@ -1808,6 +1818,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 #endif
 
 	if (sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
+    // 处理已经连接的数据包流程
 		struct dst_entry *dst = sk->sk_rx_dst;
 
 		sock_rps_save_rxhash(sk, skb);
@@ -1818,14 +1829,18 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 				sk->sk_rx_dst = NULL;
 			}
 		}
+    // 进入已连接TCP的处理函数
 		tcp_rcv_established(sk, skb, tcp_hdr(skb), skb->len);
 		return 0;
 	}
 
+  // 运行到这里，说明是非连接状态了
 	if (skb->len < tcp_hdrlen(skb) || tcp_checksum_complete(skb))
 		goto csum_err;
 
 	if (sk->sk_state == TCP_LISTEN) {
+    // 连接处于监听状态
+    // 创建新的sock
 		struct sock *nsk = tcp_v4_hnd_req(sk, skb);
 		if (!nsk)
 			goto discard;
@@ -1841,6 +1856,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	} else
 		sock_rps_save_rxhash(sk, skb);
 
+  // 根据状态处理数据包
 	if (tcp_rcv_state_process(sk, skb, tcp_hdr(skb), skb->len)) {
 		rsk = sk;
 		goto reset;
@@ -2044,11 +2060,14 @@ process:
 		else
 #endif
 		{
+      // 将数据包放到prequeue队列中
 			if (!tcp_prequeue(sk, skb))
+        // 如果失败，就直接调用tcp_v4_do_rcv函数
 				ret = tcp_v4_do_rcv(sk, skb);
 		}
 	} else if (unlikely(sk_add_backlog(sk, skb,
 					   sk->sk_rcvbuf + sk->sk_sndbuf))) {
+    // else if的情况说明用户京城正在使用该套接字，加入到backlog队列中
 		bh_unlock_sock(sk);
 		NET_INC_STATS_BH(net, LINUX_MIB_TCPBACKLOGDROP);
 		goto discard_and_relse;
