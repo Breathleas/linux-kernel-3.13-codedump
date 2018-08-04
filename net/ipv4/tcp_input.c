@@ -3359,6 +3359,7 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 }
 
 /* This routine deals with incoming acks, but not outgoing ones. */
+// 该函数用于处理接收到的ACK
 static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3442,8 +3443,10 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	 * log. Something worked...
 	 */
 	sk->sk_err_soft = 0;
+  // 由于收到对端的ACK，因此将TCP保活探测段未确认数清零，说明此时TCP连接是正常的
 	icsk->icsk_probes_out = 0;
 	tp->rcv_tstamp = tcp_time_stamp;
+  // 如果没有已发送出去未确认的段，则跳转到no_queue处处理
 	if (!prior_packets)
 		goto no_queue;
 
@@ -3485,6 +3488,9 @@ no_queue:
 	 * being used to time the probes, and is probably far higher than
 	 * it needs to be for normal retransmission.
 	 */
+  // 如果还有待发送的数据，则需要根据情况确认是否进行零窗口的探测，这由tcp_ack_probe实现。
+  // 接收到ACK，如果对方接收窗口未关闭，则需清除持续定时器中指数退避算法指数，停止探测定时器；
+  // 否则开启探测定时器。
 	if (tcp_send_head(sk))
 		tcp_ack_probe(sk);
 

@@ -622,13 +622,16 @@ EXPORT_SYMBOL(sock_tx_timestamp);
 static inline int __sock_sendmsg_nosec(struct kiocb *iocb, struct socket *sock,
 				       struct msghdr *msg, size_t size)
 {
+  // 获得套接字在sock_sendmsg中设置的IO请求
 	struct sock_iocb *si = kiocb_to_siocb(iocb);
 
+  // 初始化套接字的IO请求字段
 	si->sock = sock;
 	si->scm = NULL;
 	si->msg = msg;
 	si->size = size;
 
+  // 根据不同的套接字类型，调用其发送数据的函数
 	return sock->ops->sendmsg(iocb, sock, msg, size);
 }
 
@@ -646,8 +649,10 @@ int sock_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 	struct sock_iocb siocb;
 	int ret;
 
+  // 初始化同步的内核IO请求结构
 	init_sync_kiocb(&iocb, NULL);
 	iocb.private = &siocb;
+  // 发送消息
 	ret = __sock_sendmsg(&iocb, sock, msg, size);
 	if (-EIOCBQUEUED == ret)
 		ret = wait_on_sync_kiocb(&iocb);
@@ -2007,7 +2012,9 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	int err, ctl_len, total_len;
 
 	err = -EFAULT;
+  // 从用户空间得到用户消息
 	if (MSG_CMSG_COMPAT & flags) {
+    // 紧凑消息类型
 		if (get_compat_msghdr(msg_sys, msg_compat))
 			return -EFAULT;
 	} else {
@@ -2016,6 +2023,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 			return err;
 	}
 
+  // 消息块个数检查
 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
 		err = -EMSGSIZE;
 		if (msg_sys->msg_iovlen > UIO_MAXIOV)
@@ -2040,6 +2048,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 
 	if (msg_sys->msg_controllen > INT_MAX)
 		goto out_freeiov;
+  // 内核空间申请消息数据长度
 	ctl_len = msg_sys->msg_controllen;
 	if ((MSG_CMSG_COMPAT & flags) && ctl_len) {
 		err =
@@ -2067,8 +2076,10 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 			goto out_freectl;
 		msg_sys->msg_control = ctl_buf;
 	}
+  // 设置消息标志
 	msg_sys->msg_flags = flags;
 
+  // DONTWAIT
 	if (sock->file->f_flags & O_NONBLOCK)
 		msg_sys->msg_flags |= MSG_DONTWAIT;
 	/*
@@ -2077,18 +2088,22 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
 	 * used_address->name_len is initialized to UINT_MAX so that the first
 	 * destination address never matches.
 	 */
+  // 如果这次发送的目的地址和上次成功发送的地址一致，就可以省略安全性检查
 	if (used_address && msg_sys->msg_name &&
 	    used_address->name_len == msg_sys->msg_namelen &&
 	    !memcmp(&used_address->name, msg_sys->msg_name,
 		    used_address->name_len)) {
+    // 调用不需要进行安全性检查的函数
 		err = sock_sendmsg_nosec(sock, msg_sys, total_len);
 		goto out_freectl;
 	}
+  // 需要进行安全性检查
 	err = sock_sendmsg(sock, msg_sys, total_len);
 	/*
 	 * If this is sendmmsg() and sending to current destination address was
 	 * successful, remember it.
 	 */
+  // 如果这次发送成功，保存当前的目的地址
 	if (used_address && err >= 0) {
 		used_address->name_len = msg_sys->msg_namelen;
 		if (msg_sys->msg_name)

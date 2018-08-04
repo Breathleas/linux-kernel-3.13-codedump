@@ -705,26 +705,52 @@ void tcp_send_window_probe(struct sock *sk);
  * If this grows please adjust skbuff.h:skbuff->cb[xxx] size appropriately.
  */
 struct tcp_skb_cb {
+  // 在TCP处理接收到的TCP段之前，下层协议（IPV4）会先处理该段，且会利用
+  // SKB中的控制块来记录每一个包中的信息。例如IPV4会记录从IP首部解析出来的
+  // IP首部选项。为了不破坏三层协议层私有数据，在SKB中的TCP控制块定义了这个结构。
+  // 这包括IPV4和IPV6.
 	union {
 		struct inet_skb_parm	h4;
 #if IS_ENABLED(CONFIG_IPV6)
 		struct inet6_skb_parm	h6;
 #endif
 	} header;	/* For incoming frames		*/
+
+  // seq为当前段开始序号，而end_seq为当前端开始序号加上当前段数据长度，如果标志域
+  // 中存在SYN或FIN标志，则还需要加1，因为SYN和FIN标志都会消耗一个序号。利用
+  // seq和end_seq，很容易得到数据长度。
 	__u32		seq;		/* Starting sequence number	*/
 	__u32		end_seq;	/* SEQ + FIN + SYN + datalen	*/
+
+  // 段发送时间及段发送时记录的jiffies值。必要时，此值也用来计算RTT。
 	__u32		when;		/* used to compute rtt's	*/
+
+  // 记录原始TCP首部标志。发送过程中，tcp_transmit_skb在发送TCP段之前会根据该标志
+  // 来填充发送段的TCP首部的标志域；接收过程中，会提取接收段的TCP首部标志到该字段中。
 	__u8		tcp_flags;	/* TCP header flags. (tcp[13])	*/
 
+  // 主要用来描述段的重传状态，同时标识包是否包含紧急数据，检查接收到的SACK，
+  // 根据需要更新TCPCB_TAGBITS标志位，重传引擎会根据该标志位来确定是否需要重传。
+  // 一旦重传超时发生，所有的SACK状态标志将被清除，因为无需关心其状态。
+  // 无论通过哪种方式重传了包，重传超时或快速重传，都会设置TCPCB_EVER_RETRANS标志位。
 	__u8		sacked;		/* State flags for SACK/FACK.	*/
+
+  // 该段通过SACK被确认
 #define TCPCB_SACKED_ACKED	0x01	/* SKB ACK'd by a SACK block	*/
+
+  // 该段已经重传
 #define TCPCB_SACKED_RETRANS	0x02	/* SKB retransmitted		*/
+
+  // 该段在传输过程中丢失
 #define TCPCB_LOST		0x04	/* SKB is lost			*/
+
 #define TCPCB_TAGBITS		0x07	/* All tag bits			*/
 #define TCPCB_EVER_RETRANS	0x80	/* Ever retransmitted frame	*/
 #define TCPCB_RETRANS		(TCPCB_SACKED_RETRANS|TCPCB_EVER_RETRANS)
 
 	__u8		ip_dsfield;	/* IPv4 tos or IPv6 dsfield	*/
+
+  // 接收到的TCP段首部中的确认序号
 	/* 1 byte hole */
 	__u32		ack_seq;	/* Sequence number ACK'd	*/
 };

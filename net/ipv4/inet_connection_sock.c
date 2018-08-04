@@ -672,6 +672,7 @@ EXPORT_SYMBOL_GPL(inet_csk_reqsk_queue_prune);
  *
  *	Caller must unlock socket even in error path (bh_unlock_sock(newsk))
  */
+// 从监听socket中clone出来一个新的sock结构体
 struct sock *inet_csk_clone_lock(const struct sock *sk,
 				 const struct request_sock *req,
 				 const gfp_t priority)
@@ -681,6 +682,8 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 	if (newsk != NULL) {
 		struct inet_connection_sock *newicsk = inet_csk(newsk);
 
+    // 因为调用该函数都是处于LISTEN状态的server收到客户端的请求
+    // 因此新创建的sock都进入的是SYN_RECV状态
 		newsk->sk_state = TCP_SYN_RECV;
 		newicsk->icsk_bind_hash = NULL;
 

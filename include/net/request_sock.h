@@ -27,17 +27,23 @@ struct sk_buff;
 struct dst_entry;
 struct proto;
 
+// TCP中，指向tcp_request_sock_ops结构体
 struct request_sock_ops {
 	int		family;
+  // obj_size为具体结构体的大小，TCP中就是tcp_request_sock_ops结构体的大小
 	int		obj_size;
 	struct kmem_cache	*slab;
 	char		*slab_name;
+  // 发送SYN+ACK段的指针
 	int		(*rtx_syn_ack)(struct sock *sk,
 				       struct request_sock *req);
+  // 发送ACK段的指针
 	void		(*send_ack)(struct sock *sk, struct sk_buff *skb,
 				    struct request_sock *req);
+  // 发送RST段的指针
 	void		(*send_reset)(struct sock *sk,
 				      struct sk_buff *skb);
+  // 析构函数，在释放连接请求块时被调用，用来清理释放资源。
 	void		(*destructor)(struct request_sock *req);
 	void		(*syn_ack_timeout)(struct sock *sk,
 					   struct request_sock *req);
@@ -47,19 +53,32 @@ int inet_rtx_syn_ack(struct sock *parent, struct request_sock *req);
 
 /* struct request_sock - mini sock to represent a connection request
  */
+// 该结构用于描述对端的MSS、本端的接收窗口大小以及控制连接操作的信息，如超时时间等。
 struct request_sock {
 	struct sock_common		__req_common;
 	struct request_sock		*dl_next;
+  // 客户端连接请求段中通告的MSS。如果无通告，则为初始值，即RFC中建议的536。
 	u16				mss;
+  // 发送SYN+ACK的次数，超过系统上限时取消连接操作。
 	u8				num_retrans; /* number of retransmits */
 	u8				cookie_ts:1; /* syncookie: encode tcpopts in timestamp */
 	u8				num_timeout:7; /* number of timeouts */
 	/* The following two fields can be easily recomputed I think -AK */
+  // 标识本端的最大通知窗口，在生成SYN+ACK段时计算该值。
 	u32				window_clamp; /* window clamp at creation time */
+  // 标识在连接建立时本端接收窗口大小，初始化为0，在生成SYN+ACK段时计算该值
 	u32				rcv_wnd;	  /* rcv_wnd offered first time */
+  // 下一个将要发送的ACK中的时间戳值。当一个包含最后发送ACK确认序号的段到达时，
+  // 该段中的时间戳被保存在ts_recent中。
 	u32				ts_recent;
+
+  // 服务端接收到连接请求，并发送SYN+ACK段做为应答后，等待客户端确认的超时时间。
+  // 一旦超时，会重新发送SYN+ACK段，直到连接建立或重发次数达到上限。
 	unsigned long			expires;
+  // 处理连接请求的函数指针表，TCP中指向tcp_request_sock_ops
 	const struct request_sock_ops	*rsk_ops;
+  // 指向对于状态的传输控制块，在连接建立前无效，三次握手后会创建对应的传输控制块。
+  // 而此时连接请求块也完成了历史使命，调用accept将该连接请求快取走并释放。
 	struct sock			*sk;
 	u32				secid;
 	u32				peer_secid;
@@ -92,15 +111,26 @@ extern int sysctl_max_syn_backlog;
  *
  * @max_qlen_log - log_2 of maximal queued SYNs/REQUESTs
  */
+// 用来存储连接请求块。该结构的实例在listen系统调用之后才会被创建。
 struct listen_sock {
+  // 实际分配用来保存SYN请求连接的request_sock结构数组的长度，其值为
+  // nr_table_entries以2为底的对数
 	u8			max_qlen_log;
 	u8			synflood_warned;
 	/* 2 bytes hole, try to use */
+  // 当前连接请求块数目
 	int			qlen;
+  // 当前未重传过SYN+ACK段的请求块数目。如果每次建立连接都顺利，三次握手的段都没有重传，
+  // 那么qlen_young=qlen，有SYN+ACK段重传时会递减。
 	int			qlen_young;
+  // 用来记录连接建立定时器处理函数下次被激活时需要处理的连接请求块散列表入口。
+  // 在本次处理结束时讲当前的入口保存到该字段中，在下次处理时就从该入口开始处理。
 	int			clock_hand;
+  // 用来计算SYN请求块散列表键值的随机数
 	u32			hash_rnd;
+  // 实际分配用来保存SYN请求连接的request_sock结构数组的长度
 	u32			nr_table_entries;
+  // 指向request_sock结构散列表，在listen系统调用中生成。
 	struct request_sock	*syn_table[0];
 };
 

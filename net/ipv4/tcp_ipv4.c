@@ -1459,6 +1459,7 @@ static int tcp_v4_conn_req_fastopen(struct sock *sk,
 	return 0;
 }
 
+// TCP协议处理连接请求的函数
 int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_options_received tmp_opt;

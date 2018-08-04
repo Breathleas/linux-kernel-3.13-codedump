@@ -68,6 +68,8 @@ struct ip_options_data {
 	char			data[40];
 };
 
+// 该结构做为连接请求块的一部分，用来构成tcp_request_sock结构。
+// 该结构主要描述双方的地址、所支持的TCP选项等。
 struct inet_request_sock {
 	struct request_sock	req;
 #define ir_loc_addr		req.__req_common.skc_rcv_saddr
@@ -79,12 +81,25 @@ struct inet_request_sock {
 #define ir_iif			req.__req_common.skc_bound_dev_if
 
 	kmemcheck_bitfield_begin(flags);
-	u16			snd_wscale : 4,
+          // 发送窗口扩大因子，即要把TCP首部中指定的滑动窗口大小左移snd_wscale位后，
+          // 做为真正的滑动窗口大小。
+          // 在TCP首部中，滑动窗口大小值为16位的，而snd_wscale的值最大只能为14。
+          // 所以，滑动窗口最大可以被扩展到30位。在协议栈的实际实现中，可以看到窗口
+          // 大小设置为5840，扩大因子为2，即实际的窗口大小为5840<<2=23360KB。
+	u16		snd_wscale : 4,
+        // 接收窗口扩大因子          
 				rcv_wscale : 4,
+        // 标识TCP段是否存在TCP时间戳选项   
 				tstamp_ok  : 1,
+        // 标识是否支持SACK，支持该选项是否出现在SYN段中。
 				sack_ok	   : 1,
+        // 标识是否支持窗口扩大因子，如果支持该选项也只能出现在SYN段中。
 				wscale_ok  : 1,
+        // 标识是否启用了显式拥塞通知。
 				ecn_ok	   : 1,
+        // 标识已接受到第三次握手的ACK段，但是由于服务器繁忙或其他原因导致未能建立起连接，此时可
+        // 根据该标志重新给客户端发送SYN+ACK段，再次进行连接的建立。该标志的设置同时受
+        // tcp_abort_on_overflow的控制
 				acked	   : 1,
 				no_srccheck: 1;
 	kmemcheck_bitfield_end(flags);

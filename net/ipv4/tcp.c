@@ -1059,10 +1059,10 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	 * is fully established.
 	 */
   // 套接字只有处于已连接状态（ESTABLISH）和等待关闭（CLOSE_WAIT）状态下，才能
-  // 直接发送数据。
+  // 直接发送数据。CLOSE_WAIT状态指收到了对方FIN包，但本端还没有关闭链接的状态。
 	if (((1 << sk->sk_state) & ~(TCPF_ESTABLISHED | TCPF_CLOSE_WAIT)) &&
 	    !tcp_passive_fastopen(sk)) {
-    // 等待连接建立
+    // 等待连接建立，如果失败就返回出错
 		if ((err = sk_stream_wait_connect(sk, &timeo)) != 0)
 			goto do_error;
 	}
@@ -3177,6 +3177,7 @@ void __init tcp_init(void)
 	 *
 	 * The methodology is similar to that of the buffer cache.
 	 */
+  // 用于存储TCP状态为ESTABLISHED的传输控制块的散列表。
 	tcp_hashinfo.ehash =
 		alloc_large_system_hash("TCP established",
 					sizeof(struct inet_ehash_bucket),
@@ -3192,6 +3193,7 @@ void __init tcp_init(void)
 
 	if (inet_ehash_locks_alloc(&tcp_hashinfo))
 		panic("TCP: failed to alloc ehash_locks");
+  // 存储已绑定端口信息的散列表
 	tcp_hashinfo.bhash =
 		alloc_large_system_hash("TCP bind",
 					sizeof(struct inet_bind_hashbucket),
@@ -3211,8 +3213,10 @@ void __init tcp_init(void)
 
 	cnt = tcp_hashinfo.ehash_mask + 1;
 
+  // max_tw_buckets保持在TIME-WAIT状态下的套接字的最大数量
 	tcp_death_row.sysctl_max_tw_buckets = cnt / 2;
 	sysctl_tcp_max_orphans = cnt / 2;
+  // max_syn_backlog未完成三次握手的SYN请求最大数量
 	sysctl_max_syn_backlog = max(128, cnt / 256);
 
 	tcp_init_mem();
@@ -3221,6 +3225,7 @@ void __init tcp_init(void)
 	max_wshare = min(4UL*1024*1024, limit);
 	max_rshare = min(6UL*1024*1024, limit);
 
+  // 参见tcp_mem系统参数
 	sysctl_tcp_wmem[0] = SK_MEM_QUANTUM;
 	sysctl_tcp_wmem[1] = 16*1024;
 	sysctl_tcp_wmem[2] = max(64*1024, max_wshare);
@@ -3234,6 +3239,7 @@ void __init tcp_init(void)
 
 	tcp_metrics_init();
 
+  // 注册reno拥塞控制算法
 	tcp_register_congestion_control(&tcp_reno);
 
 	tcp_tasklet_init();
