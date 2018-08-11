@@ -102,11 +102,15 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	int smallest_size = -1, smallest_rover;
 	kuid_t uid = sock_i_uid(sk);
 
+  // 禁止下半部。进程与下半部之间进行同步，因为在后面的操作中有些数据
+  // 有被进程和下半部同时访问的可能，因此先禁止下半部，再进行后面的操作。
 	local_bh_disable();
-	if (!snum) {
+	if (!snum) {  // 如果待绑定的本地端口为0，则自动为套接口分配一个可用的端口
 		int remaining, rover, low, high;
 
 again:
+    // 获取自动分配端口的区间[low,high]，重试分配次数remaining，
+    // 并随机生成在分配区间内的起始端口号rover
 		inet_get_local_port_range(net, &low, &high);
 		remaining = (high - low) + 1;
 		smallest_rover = rover = net_random() % remaining + low;
@@ -115,9 +119,12 @@ again:
 		do {
 			if (inet_is_reserved_local_port(rover))
 				goto next_nolock;
+      // 由rover端口号和hashsize计算得到链表
 			head = &hashinfo->bhash[inet_bhashfn(net, rover,
 					hashinfo->bhash_size)];
+      // 对链表进行加锁
 			spin_lock(&head->lock);
+      // 遍历链表，判断是否有相同的端口号在此链表上
 			inet_bind_bucket_for_each(tb, &head->chain)
 				if (net_eq(ib_net(tb), net) && tb->port == rover) {
 					if (((tb->fastreuse > 0 &&
@@ -155,7 +162,9 @@ again:
 		 * drops to zero, we broke out of the do/while loop at
 		 * the top level, not from the 'break;' statement.
 		 */
+    // 先把返回值存为1
 		ret = 1;
+    // 如果remaining<=0，说明尝试次数已经用完，获取端口号失败，跳转到fail
 		if (remaining <= 0) {
 			if (smallest_size != -1) {
 				snum = smallest_rover;
@@ -166,9 +175,11 @@ again:
 		/* OK, here is the one we will use.  HEAD is
 		 * non-NULL and we hold it's mutex.
 		 */
+    // 获取成功
 		snum = rover;
-	} else {
+	} else {  // 这里是指定端口号的场景
 have_snum:
+    // 查找该端口号是否已经被占用
 		head = &hashinfo->bhash[inet_bhashfn(net, snum,
 				hashinfo->bhash_size)];
 		spin_lock(&head->lock);
@@ -178,9 +189,10 @@ have_snum:
 	}
 	tb = NULL;
 	goto tb_not_found;
-tb_found:
+tb_found: // 这里是找到了指定端口号的场景
 	if (!hlist_empty(&tb->owners)) {
 		if (sk->sk_reuse == SK_FORCE_REUSE)
+      // 如果强制复用端口，就不用做检查，跳转到success处理
 			goto success;
 
 		if (((tb->fastreuse > 0 &&
@@ -188,8 +200,11 @@ tb_found:
 		     (tb->fastreuseport > 0 &&
 		      sk->sk_reuseport && uid_eq(tb->fastuid, uid))) &&
 		    smallest_size == -1) {
+      // 如果端口可被复用，传输控制块可复用端口不处于LISTEN状态，表示
+      // 可使用该端口，跳转到success处理
 			goto success;
 		} else {
+      // 否则调用bind_conflict检测复用端口是否冲突
 			ret = 1;
 			if (inet_csk(sk)->icsk_af_ops->bind_conflict(sk, tb, true)) {
 				if (((sk->sk_reuse && sk->sk_state != TCP_LISTEN) ||
@@ -204,12 +219,15 @@ tb_found:
 			}
 		}
 	}
-tb_not_found:
+tb_not_found: // 处理没有找到的情况
 	ret = 1;
+  // 从hashinfo->bind_bucket_cachep中分配新的端口信息结构体，并加入散列表中。
 	if (!tb && (tb = inet_bind_bucket_create(hashinfo->bind_bucket_cachep,
 					net, head, snum)) == NULL)
 		goto fail_unlock;
 	if (hlist_empty(&tb->owners)) {
+    // 如果此端口没有被绑定，待绑定的传输控制块允许端口复用，且
+    // 不处在侦听状态，则此端口可以被复用，否则不能被复用
 		if (sk->sk_reuse && sk->sk_state != TCP_LISTEN)
 			tb->fastreuse = 1;
 		else
@@ -220,6 +238,8 @@ tb_not_found:
 		} else
 			tb->fastreuseport = 0;
 	} else {
+    // 如果此端口已被绑定，即使此端口可被复用，但传输控制块不可复用端口
+    // 或处于侦听状态，则此端口也不能被复用。
 		if (tb->fastreuse &&
 		    (!sk->sk_reuse || sk->sk_state == TCP_LISTEN))
 			tb->fastreuse = 0;
@@ -245,6 +265,8 @@ EXPORT_SYMBOL_GPL(inet_csk_get_port);
  * Wait for an incoming connection, avoid race conditions. This must be called
  * with the socket locked.
  */
+// 用于侦听的传输控制块在指定的时间内等待新的连接，直至建立新的连接或等到超时，
+// 或者收到某个信号或等其他情况发生
 static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -269,13 +291,17 @@ static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
 		prepare_to_wait_exclusive(sk_sleep(sk), &wait,
 					  TASK_INTERRUPTIBLE);
 		release_sock(sk);
+    // 如果当前队列为空
 		if (reqsk_queue_empty(&icsk->icsk_accept_queue))
+      // 获取等待的超时时间
 			timeo = schedule_timeout(timeo);
 		lock_sock(sk);
 		err = 0;
+    // 如果队列不为空，退出循环
 		if (!reqsk_queue_empty(&icsk->icsk_accept_queue))
 			break;
 		err = -EINVAL;
+    // 当前状态不是LISTEN，退出循环
 		if (sk->sk_state != TCP_LISTEN)
 			break;
 		err = sock_intr_errno(timeo);
@@ -405,6 +431,7 @@ void inet_csk_reset_keepalive_timer(struct sock *sk, unsigned long len)
 }
 EXPORT_SYMBOL(inet_csk_reset_keepalive_timer);
 
+// 根据输出网络设备、源地址、源端口号、目的地址、目的端口号等查询路由
 struct dst_entry *inet_csk_route_req(struct sock *sk,
 				     struct flowi4 *fl4,
 				     const struct request_sock *req)
@@ -415,6 +442,7 @@ struct dst_entry *inet_csk_route_req(struct sock *sk,
 	struct net *net = sock_net(sk);
 	int flags = inet_sk_flowi_flags(sk);
 
+  // 定义并初始化用于路由查询的条件组合，包含了输出网络设备、三层和四层协议首部中的参数等
 	flowi4_init_output(fl4, sk->sk_bound_dev_if, sk->sk_mark,
 			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE,
 			   sk->sk_protocol,
@@ -422,9 +450,12 @@ struct dst_entry *inet_csk_route_req(struct sock *sk,
 			   (opt && opt->opt.srr) ? opt->opt.faddr : ireq->ir_rmt_addr,
 			   ireq->ir_loc_addr, ireq->ir_rmt_port, inet_sk(sk)->inet_sport);
 	security_req_classify_flow(req, flowi4_to_flowi(fl4));
+  // 根据路由查询条件，进行路由缓存项的查询
 	rt = ip_route_output_flow(net, fl4, sk);
 	if (IS_ERR(rt))
 		goto no_route;
+  // 在IP首部中包含了严格源路由选项的情况下，如果从选项中获取的下一跳与
+  // 路由找到的不匹配，则路由失败
 	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto route_err;
 	return &rt->dst;

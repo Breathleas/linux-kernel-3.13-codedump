@@ -496,7 +496,7 @@ EXPORT_SYMBOL(tcp_create_openreq_child);
  *
  * We don't need to initialize tmp_opt.sack_ok as we don't use the results
  */
-
+// 处理SYN_RECV状态下的传输控制块
 struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 			   struct request_sock *req,
 			   struct request_sock **prev,
@@ -505,6 +505,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	struct tcp_options_received tmp_opt;
 	struct sock *child;
 	const struct tcphdr *th = tcp_hdr(skb);
+  // 获取接收段的TCP首部RST、SYN以及ACK的标志位值
 	__be32 flg = tcp_flag_word(th) & (TCP_FLAG_RST|TCP_FLAG_SYN|TCP_FLAG_ACK);
 	bool paws_reject = false;
 
@@ -526,6 +527,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 			 * from another data.
 			 */
 			tmp_opt.ts_recent_stamp = get_seconds() - ((TCP_TIMEOUT_INIT/HZ)<<req->num_timeout);
+      // 调用tcp_paws_reject检验TCP序号是否有效
 			paws_reject = tcp_paws_reject(&tmp_opt, th->rst);
 		}
 	}
@@ -558,6 +560,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 		 * the idea of fast retransmit in recovery.
 		 */
     // 这里判断出该SYN报为重传的SYN包，回复SYN+ACK
+    // 然后返回NULL，表示此次对该段的处理完毕，无需继续处理
 		if (!inet_rtx_syn_ack(sk, req))
 			req->expires = min(TCP_TIMEOUT_INIT << req->num_timeout,
 					   TCP_RTO_MAX) + jiffies;
@@ -621,7 +624,8 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	 * elsewhere and is checked directly against the child socket rather
 	 * than req because user data may have been sent out.
 	 */
-  // 非法的ACK值
+  // 非法的ACK值，即ACK段的序号与SYN+ACK段的序号不匹配，则不做处理
+  // 返回父传输控制块，在tcp_rcv_state_process中再做处理
 	if ((flg & TCP_FLAG_ACK) && !fastopen &&
 	    (TCP_SKB_CB(skb)->ack_seq !=
 	     tcp_rsk(req)->snt_isn + 1))
@@ -643,6 +647,8 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
     // 如果时间戳检测失败，则增加相应的技术
 		if (paws_reject)
 			NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_PAWSESTABREJECTED);
+    // 返回NULL，直接丢弃接收的段，但返回之前，前面需要确认是不是RST段，
+    // 如果不是则需要给对端发送ACK
 		return NULL;
 	}
 
@@ -699,7 +705,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	 * ESTABLISHED STATE. If it will be dropped after
 	 * socket is created, wait for troubles.
 	 */
-  // 至此，TCP三次握手已经完成。使用syn_recv_sock创建真正的套接字
+  // 至此，TCP三次握手已经完成。使用syn_recv_sock创建真正的『子』套接字
 	child = inet_csk(sk)->icsk_af_ops->syn_recv_sock(sk, skb, req, NULL);
 	if (child == NULL)
 		goto listen_overflow;
@@ -713,12 +719,18 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	return child;
 
 listen_overflow:
+  // 如果由于服务器繁忙或其它原因导致连接建立失败的，且未启用
+  // tcp_abort_on_overflow，则设置连接请求中的acked标志，表示
+  // 已接收到作为第三次握手的ACK段，连接定时器可根据该标志重新给
+  // 客户端发送SYN+ACK段，再次尝试建立连接。
 	if (!sysctl_tcp_abort_on_overflow) {
 		inet_rsk(req)->acked = 1;
 		return NULL;
 	}
 
 embryonic_reset:
+  // 在建立连接过程中，SYN_RECV状态的传输控制块接收到了SYN段，则根据
+  // RFC规定需给对端发送RST段，然后从连接请求块散列表中删除对应的连接请求块。
 	if (!(flg & TCP_FLAG_RST)) {
 		/* Received a bad SYN pkt - for TFO We try not to reset
 		 * the local connection unless it's really necessary to
@@ -749,7 +761,12 @@ EXPORT_SYMBOL(tcp_check_req);
  * locked is obtained, other packets cause the same connection to
  * be created.
  */
-
+// 新的子传输控制块已建立并激活，则该子传输控制块需处理TCP段，
+// 同时也需唤醒等待该套接字的进程，如accept系统调用等，如果此时，
+// 子传输控制块被用户进程锁定，则将该TCP段添加到子传输控制块的后备接收队列中。
+// parent：为接收并创建子传输控制块的侦听进程
+// child：新创建的子传输控制块。
+// skb：第三次握手的ACK段
 int tcp_child_process(struct sock *parent, struct sock *child,
 		      struct sk_buff *skb)
 {

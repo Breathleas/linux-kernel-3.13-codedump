@@ -43,26 +43,40 @@ int reqsk_queue_alloc(struct request_sock_queue *queue,
 	size_t lopt_size = sizeof(struct listen_sock);
 	struct listen_sock *lopt;
 
+  // 计算出用于保存SYN请求连接的request_sock结构数组的长度
+  // 取用户设定的连接队列长度最大值参数nr_table_entries和系统最多同时
+  // 存在未完成三次握手SYN请求书max_syn_backlog的最小值，两者都用来
+  // 控制连接队列的长度，只是前者针对某传输控制块，后者控制的是全局的
 	nr_table_entries = min_t(u32, nr_table_entries, sysctl_max_syn_backlog);
+  // 调用roundup_pow_of_two以确保nr_table_entries的值为2^n
 	nr_table_entries = max_t(u32, nr_table_entries, 8);
 	nr_table_entries = roundup_pow_of_two(nr_table_entries + 1);
+  // 计算用于保存SYN请求连接的listen_sock结构的大小
 	lopt_size += nr_table_entries * sizeof(struct request_sock *);
+  // 如果用于保存SYN请求连接的listen_sock结构大于大于一个页面，调用
+  // vmalloc从高位内存分配内存虚拟空间
 	if (lopt_size > PAGE_SIZE)
 		lopt = vzalloc(lopt_size);
 	else
+  // 小于一个页面，则在常规内存中分配内存并清零    
 		lopt = kzalloc(lopt_size, GFP_KERNEL);
+  // 分配失败，返回ENOMEM错误码
 	if (lopt == NULL)
 		return -ENOMEM;
 
+  // 前面已经由roundup_pow_of_two确保nr_table_entries值为2^n，
+  // 在此计算该n值的max_qlen_log
 	for (lopt->max_qlen_log = 3;
 	     (1 << lopt->max_qlen_log) < nr_table_entries;
 	     lopt->max_qlen_log++);
 
+  // 初始化listen_sock结构中的一些成员
 	get_random_bytes(&lopt->hash_rnd, sizeof(lopt->hash_rnd));
 	rwlock_init(&queue->syn_wait_lock);
 	queue->rskq_accept_head = NULL;
 	lopt->nr_table_entries = nr_table_entries;
 
+  // 加入传输控制块的请求块容器中。
 	write_lock_bh(&queue->syn_wait_lock);
 	queue->listen_opt = lopt;
 	write_unlock_bh(&queue->syn_wait_lock);
