@@ -154,6 +154,8 @@ struct rtable;
  * @mc_list - Group array
  * @cork - info to build ip hdr on each ip frag while socket is corked
  */
+// inet_sock 是IPV4协议专用的传输控制块，是对sock结构的扩展，
+// 在传输控制块已具备的基础上，进一步提供了IPV4协议专有的一些属性。
 struct inet_sock {
 	/* sk and pinet6 has to be the first two members of inet_sock */
 	struct sock		sk;

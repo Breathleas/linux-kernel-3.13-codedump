@@ -154,6 +154,8 @@ typedef __u64 __bitwise __addrpair;
  *	This is the minimal network layer representation of sockets, the header
  *	for struct sock and struct inet_timewait_sock.
  */
+// sock_common结构体单独定义，是因为sock结构体和inet_timewait_sock结构前面一部分
+// 成员是一样的，因此提取出来构成一个单独的结构体。
 struct sock_common {
 	/* skc_daddr and skc_rcv_saddr must be grouped on a 8 bytes aligned
 	 * address on 64bit arches : cf INET_MATCH()
@@ -178,15 +180,20 @@ struct sock_common {
 		};
 	};
 
+  // 所属协议族
 	unsigned short		skc_family;
+  // 等同于TCP状态
 	volatile unsigned char	skc_state;
+  // 是否可以重用地址和端口
 	unsigned char		skc_reuse:4;
 	unsigned char		skc_reuseport:4;
+  // 不为0的情况下是输出报文的网络设备索引号
 	int			skc_bound_dev_if;
 	union {
 		struct hlist_node	skc_bind_node;
 		struct hlist_nulls_node skc_portaddr_node;
 	};
+  // 指向网络结构层的指针
 	struct proto		*skc_prot;
 #ifdef CONFIG_NET_NS
 	struct net	 	*skc_net;
@@ -324,6 +331,8 @@ struct sock {
 #define sk_v6_rcv_saddr	__sk_common.skc_v6_rcv_saddr
 
 	socket_lock_t		sk_lock;
+  // 接收队列，等待用户进程读取。TCP比较特别，当接收到的数据不能直接
+  // 复制到用户空间时才会缓存在此。
 	struct sk_buff_head	sk_receive_queue;
 	/*
 	 * The backlog queue is special, it is always used with
@@ -333,6 +342,10 @@ struct sock {
 	 * on 64bit arches, not because its logically part of
 	 * backlog.
 	 */
+  // 后备接收队列，目前只用于TCP。传输控制块被上锁后（
+  // 如应用层读取数据时），当前新的报文传递到传输控制块时，
+  // 只能把报文放到后备接收队列中，之后有用户进程读取TCP
+  // 数据时，再从该队列中取出复制到用户空间中。
 	struct {
 		atomic_t	rmem_alloc;
 		int		len;
@@ -349,6 +362,7 @@ struct sock {
 	unsigned int		sk_ll_usec;
 #endif
 	atomic_t		sk_drops;
+  // 接收缓冲区大小的上限
 	int			sk_rcvbuf;
 
 	struct sk_filter __rcu	*sk_filter;
@@ -363,17 +377,27 @@ struct sock {
 #endif
 	unsigned long 		sk_flags;
 	struct dst_entry	*sk_rx_dst;
+  // 目的路由项缓存。
 	struct dst_entry __rcu	*sk_dst_cache;
 	spinlock_t		sk_dst_lock;
+  // 所在传输控制块中，为发送而分配的所有SKB数据区的大小
 	atomic_t		sk_wmem_alloc;
+  // 分配辅助缓冲区的上限，辅助数据包包括进行设置选项、设置过滤时分配的
+  // 内存和组播设置等。
 	atomic_t		sk_omem_alloc;
+  // 发送缓冲区长度的上限，发送队列中报文数据总长度不能超过该值。
 	int			sk_sndbuf;
+  // 发送队列。在TCP中，此队列同时也是重传队列。在sk_send_head之前为重传队列，
+  // 之后为发送队列，参见sk_send_head
 	struct sk_buff_head	sk_write_queue;
 	kmemcheck_bitfield_begin(flags);
+  // 关闭套接字的标志
 	unsigned int		sk_shutdown  : 2,
 				sk_no_check  : 2,
 				sk_userlocks : 4,
+  // 套接字所属的协议        
 				sk_protocol  : 8,
+  // 套接字类型，如SOCK_STREAM        
 				sk_type      : 16;
 	kmemcheck_bitfield_end(flags);
 	int			sk_wmem_queued;
@@ -387,12 +411,15 @@ struct sock {
 	u16			sk_gso_max_segs;
 	int			sk_rcvlowat;
 	unsigned long	        sk_lingertime;
+  // 错误链表。存放详细的出错信息。
 	struct sk_buff_head	sk_error_queue;
 	struct proto		*sk_prot_creator;
 	rwlock_t		sk_callback_lock;
 	int			sk_err,
 				sk_err_soft;
+  // 当前已建立的连接数
 	unsigned short		sk_ack_backlog;
+  // 连接队列长度的上限。
 	unsigned short		sk_max_ack_backlog;
 	__u32			sk_priority;
 #if IS_ENABLED(CONFIG_NETPRIO_CGROUP)
@@ -400,16 +427,26 @@ struct sock {
 #endif
 	struct pid		*sk_peer_pid;
 	const struct cred	*sk_peer_cred;
+  // 套接口层接收超时
 	long			sk_rcvtimeo;
 	long			sk_sndtimeo;
+  // 传输控制块存放私有数据的指针
 	void			*sk_protinfo;
+  // 通过不同的TCP状态，来实现连接定时器、FIN_WAIT_2定时器及
+  // TCP保活定时器，在tcp_keepalive_timer中实现
 	struct timer_list	sk_timer;
+  // 在未启用SOCK_RCVTSTAMP套接口选项时，记录报文接收数据到应用层的时间戳。
+  // 在启用SOCK_RCVTSTAMP套接口选项时，接收数据到应用层的时间戳在SKB的tstamp中。
 	ktime_t			sk_stamp;
+  // 指向对应套接口的指针
 	struct socket		*sk_socket;
 	void			*sk_user_data;
 	struct page_frag	sk_frag;
+  // 指向sk_write_queue队列中第一个未发送的结点，如果sk_send_head为空则表示
+  // 发送队列是空的，发送队列上的报文已全部发送。
 	struct sk_buff		*sk_send_head;
 	__s32			sk_peek_off;
+  // 标识有数据即将写入套接口，也就是有写数据的请求。
 	int			sk_write_pending;
 #ifdef CONFIG_SECURITY
 	void			*sk_security;
