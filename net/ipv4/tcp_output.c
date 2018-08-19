@@ -3107,6 +3107,7 @@ void tcp_send_ack(struct sock *sk)
 	struct sk_buff *buff;
 
 	/* If we have been reset, we may not send again. */
+  // 发送ACK段时，不能处于CLOSE状态
 	if (sk->sk_state == TCP_CLOSE)
 		return;
 
@@ -3114,8 +3115,10 @@ void tcp_send_ack(struct sock *sk)
 	 * tcp_transmit_skb() will set the ownership to this
 	 * sock.
 	 */
+  // 分配SKB
 	buff = alloc_skb(MAX_TCP_HEADER, sk_gfp_atomic(sk, GFP_ATOMIC));
 	if (buff == NULL) {
+    // 如果分配失败，启动延时确认定时器后返回
 		inet_csk_schedule_ack(sk);
 		inet_csk(sk)->icsk_ack.ato = TCP_ATO_MIN;
 		inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK,
@@ -3124,10 +3127,12 @@ void tcp_send_ack(struct sock *sk)
 	}
 
 	/* Reserve space for headers and prepare control bits. */
+  // 设置SKB中相关的参数
 	skb_reserve(buff, MAX_TCP_HEADER);
 	tcp_init_nondata_skb(buff, tcp_acceptable_seq(sk), TCPHDR_ACK);
 
 	/* Send it off, this clears delayed acks for us. */
+  // 设置TCP序号和发送时间，调用tcp_transmit_skb将该ACK段发送出去
 	TCP_SKB_CB(buff)->when = tcp_time_stamp;
 	tcp_transmit_skb(sk, buff, 0, sk_gfp_atomic(sk, GFP_ATOMIC));
 }

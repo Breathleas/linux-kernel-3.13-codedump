@@ -1907,6 +1907,9 @@ void tcp_clear_retrans(struct tcp_sock *tp)
  * and reset tags completely, otherwise preserve SACKs. If receiver
  * dropped its ofo queue, we will know this due to reneging detection.
  */
+// 进入loss状态，参数how不为0则在设置丢失标志时会清除重传段的SACK标志，
+// 否则会保持SACK标志，并且可以通过判断ACK是否确认了先前已经被SACK确认的
+// 段检测，检测接收方是否删除了保存到失序队列中的段。
 void tcp_enter_loss(struct sock *sk, int how)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
@@ -1918,12 +1921,18 @@ void tcp_enter_loss(struct sock *sk, int how)
 	if (icsk->icsk_ca_state <= TCP_CA_Disorder ||
 	    !after(tp->high_seq, tp->snd_una) ||
 	    (icsk->icsk_ca_state == TCP_CA_Loss && !icsk->icsk_retransmits)) {
+    // 如果刚进入LOSS状态，则需要设置发送拥塞窗口的阈值，同时在设置阈值
+    // 前保存当前的阈值，以便在拥塞窗口调整撤销时使用。再发送CA_EVENT_LOSS拥塞
+    // 事件给具体拥塞算法模块。
 		new_recovery = true;
 		tp->prior_ssthresh = tcp_current_ssthresh(sk);
 		tp->snd_ssthresh = icsk->icsk_ca_ops->ssthresh(sk);
 		tcp_ca_event(sk, CA_EVENT_LOSS);
 	}
+  // 进入了loss状态，将拥塞窗口设置为1个段大小
 	tp->snd_cwnd	   = 1;
+  // 由于调整了拥塞窗口大小，因此也需要对snd_cwnd_cnt进行清零，同时也记录
+  // 最后一次检验拥塞窗口的时间snd_cwnd_stamp
 	tp->snd_cwnd_cnt   = 0;
 	tp->snd_cwnd_stamp = tcp_time_stamp;
 
@@ -1931,7 +1940,7 @@ void tcp_enter_loss(struct sock *sk, int how)
 
 	if (tcp_is_reno(tp))
 		tcp_reset_reno_sack(tp);
-
+  // 需要记录snd.una，以便在合适的时候能够进行拥塞窗口调整撤销操作。
 	tp->undo_marker = tp->snd_una;
 	if (how) {
 		tp->sacked_out = 0;
@@ -1942,13 +1951,17 @@ void tcp_enter_loss(struct sock *sk, int how)
 	tcp_for_write_queue(skb, sk) {
 		if (skb == tcp_send_head(sk))
 			break;
-
+    // 如果重传队列中段的记分牌已经有重传标志，则清除拥塞窗口调整撤销标记。
 		if (TCP_SKB_CB(skb)->sacked & TCPCB_RETRANS)
 			tp->undo_marker = 0;
+    // 将重传队列中段记分牌去掉重传和丢失标记。
 		TCP_SKB_CB(skb)->sacked &= (~TCPCB_TAGBITS)|TCPCB_SACKED_ACKED;
 		if (!(TCP_SKB_CB(skb)->sacked&TCPCB_SACKED_ACKED) || how) {
+      // 如果重传队列中段记分牌没有SACK标志或需要清除SACK标志，则清除
+      // SACK标志的同时添加上LOST标志
 			TCP_SKB_CB(skb)->sacked &= ~TCPCB_SACKED_ACKED;
 			TCP_SKB_CB(skb)->sacked |= TCPCB_LOST;
+      // 统计丢失段的数量
 			tp->lost_out += tcp_skb_pcount(skb);
 			tp->retransmit_high = TCP_SKB_CB(skb)->end_seq;
 		}
@@ -1960,10 +1973,14 @@ void tcp_enter_loss(struct sock *sk, int how)
 	 */
 	if (icsk->icsk_ca_state <= TCP_CA_Disorder &&
 	    tp->sacked_out >= sysctl_tcp_reordering)
+    // 重新设置reordering
 		tp->reordering = min_t(unsigned int, tp->reordering,
 				       sysctl_tcp_reordering);
+  // 设置当前拥塞状态为LOSS
 	tcp_set_ca_state(sk, TCP_CA_Loss);
+  // 记录拥塞时的snd.nxt
 	tp->high_seq = tp->snd_nxt;
+  // 设置ecn_flags，表示发送方进入拥塞状态
 	TCP_ECN_queue_cwr(tp);
 
 	/* F-RTO RFC5682 sec 3.1 step 1: retransmit SND.UNA if no previous
@@ -2527,10 +2544,13 @@ void tcp_enter_cwr(struct sock *sk, const int set_ssthresh)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
+  // 进入CWR之后不需要拥塞窗口撤销了，因此需要清除拥塞控制的慢启动阈值的旧值。
 	tp->prior_ssthresh = 0;
-	if (inet_csk(sk)->icsk_ca_state < TCP_CA_CWR) {
+	if (inet_csk(sk)->icsk_ca_state < TCP_CA_CWR) { // 在open或disorder状态才能迁移到CWR状态
+    // 进入CWR状态不允许再进行拥塞窗口撤销了
 		tp->undo_marker = 0;
 		tcp_init_cwnd_reduction(sk, set_ssthresh);
+    // 设置当前拥塞状态为CWR
 		tcp_set_ca_state(sk, TCP_CA_CWR);
 	}
 }
@@ -5729,10 +5749,14 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 
 	case TCP_SYN_SENT:  // 已经发送了SYN包
 		queued = tcp_rcv_synsent_state_process(sk, skb, th, len);
+    // 处理SYN_SENT状态下接收到的TCP段，如果返回值大于0表示需要给对端
+    // 发送RST段，该TCP段的释放由tcp_rcv_state_process的调用者来处理。
 		if (queued >= 0)
 			return queued;
 
 		/* Do step6 onward by hand. */
+    // 在处理了SYN_SENT状态下接收到的段之后，还需处理紧急数据，然后释放该段，
+    // 最后检测是否有数据需要发送。
 		tcp_urg(sk, skb, th);
 		__kfree_skb(skb);
 		tcp_data_snd_check(sk);

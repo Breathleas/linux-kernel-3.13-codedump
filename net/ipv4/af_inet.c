@@ -611,7 +611,7 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
     // 未连接状态
 	case SS_UNCONNECTED:
 		err = -EISCONN;
-    // 当前状态不是CLOSE则报错
+    // 当前状态不是CLOSE，说明已连接，无需操作
 		if (sk->sk_state != TCP_CLOSE)
 			goto out;
 
@@ -638,6 +638,8 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 
   // 当前连接状态是正在连接的状态（即刚发送了syn或者收到了syn包）
 	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
+    // SYN_SENT和SYN_RECV都表示半连接状态，TCP为这两种状态时，阻塞
+    // 方式下需等待连接完成或超时；非阻塞方式下，则无需等待连接完成。
 		int writebias = (sk->sk_protocol == IPPROTO_TCP) &&
 				tcp_sk(sk)->fastopen_req &&
 				tcp_sk(sk)->fastopen_req->data ? 1 : 0;

@@ -474,12 +474,15 @@ void inet_unhash(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(inet_unhash);
 
+// death_row：存放hashinfo散列表的管理结构
+// sk：进行连接的传输控制块
 int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		struct sock *sk, u32 port_offset,
 		int (*check_established)(struct inet_timewait_death_row *,
 			struct sock *, __u16, struct inet_timewait_sock **),
 		int (*hash)(struct sock *sk, struct inet_timewait_sock *twp))
 {
+  // 获取指向TCP中散列表管理器hashinfo
 	struct inet_hashinfo *hinfo = death_row->hashinfo;
 	const unsigned short snum = inet_sk(sk)->inet_num;
 	struct inet_bind_hashbucket *head;
@@ -488,20 +491,25 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 	struct net *net = sock_net(sk);
 	int twrefcnt = 1;
 
-	if (!snum) {
+	if (!snum) { // 如果该传输控制块没有绑定端口
 		int i, remaining, low, high, port;
 		static u32 hint;
 		u32 offset = hint + port_offset;
 		struct inet_timewait_sock *tw = NULL;
 
+    // 获取动态端口范围
 		inet_get_local_port_range(net, &low, &high);
 		remaining = (high - low) + 1;
 
 		local_bh_disable();
+    // 在动态选择的端口范围内遍历
 		for (i = 1; i <= remaining; i++) {
+      // 端口
 			port = low + (i + offset) % remaining;
+      // 保留端口，略过
 			if (inet_is_reserved_local_port(port))
 				continue;
+      // 获得端口所在hash链表
 			head = &hinfo->bhash[inet_bhashfn(net, port,
 					hinfo->bhash_size)];
 			spin_lock(&head->lock);
@@ -517,6 +525,8 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 					    tb->fastreuseport >= 0)
 						goto next_port;
 					WARN_ON(hlist_empty(&tb->owners));
+          // 检测端口是否能被复用，动态绑定的端口只能复用在
+          // TIME_WAIT状态下绑定的端口，当然还需要启用tcp_tw_reuse。
 					if (!check_established(death_row, sk,
 								port, &tw))
 						goto ok;
@@ -524,6 +534,8 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 				}
 			}
 
+      // 如果该端口号没有被使用，为该端口创建信息块并将其添加到
+      // bhash散列表中。
 			tb = inet_bind_bucket_create(hinfo->bind_bucket_cachep,
 					net, head, port);
 			if (!tb) {
@@ -545,8 +557,11 @@ ok:
 		hint += i;
 
 		/* Head lock still held and bh's disabled */
+    // 将传输控制块与绑定端口信息关联，完成绑定
 		inet_bind_hash(sk, tb, port);
 		if (sk_unhashed(sk)) {
+      // 如果该传输控制块未添加或已脱离ehash散列表，则需
+      // 添加到该散列表中
 			inet_sk(sk)->inet_sport = htons(port);
 			twrefcnt += hash(sk, tw);
 		}
@@ -555,6 +570,8 @@ ok:
 		spin_unlock(&head->lock);
 
 		if (tw) {
+      // 如果与一个TIME_WAIT状态的套接口复用该端口，则需删除释放该TIME_WAIT
+      // 状态的套接口，绑定完成后返回。
 			inet_twsk_deschedule(tw, death_row);
 			while (twrefcnt) {
 				twrefcnt--;
@@ -566,6 +583,9 @@ ok:
 		goto out;
 	}
 
+  // 对于已绑定端口的传输控制块和绑定信息块需要相应确认。确认绑定信息块与之
+  // 相绑定的传输控制块是不是该传输控制块，该传输控制块指向绑定信息块的指针
+  // 是否有效。不然需要重新调用check_established检测该端口是否被使用。
 	head = &hinfo->bhash[inet_bhashfn(net, snum, hinfo->bhash_size)];
 	tb  = inet_csk(sk)->icsk_bind_hash;
 	spin_lock_bh(&head->lock);
